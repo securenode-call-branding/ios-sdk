@@ -43,7 +43,7 @@ pod 'SecureNodeSDK', '~> 1.0.0'
 import SecureNodeSDK
 
 let config = SecureNodeConfig(
-    apiURL: URL(string: "https://calls.securenode.io/api")!,
+    apiURL: URL(string: "https://api.securenode.io")!,
     apiKey: "your-api-key-here" // Get from Portal → Settings → API Keys
 )
 
@@ -200,6 +200,6 @@ GPL-3.0
 
 ## Support
 
-- Documentation: [https://calls.securenode.io/sdk](https://calls.securenode.io/sdk)
+- Documentation: [https://verify.securenode.io/sdk](https://verify.securenode.io/sdk)
 - Issues: [GitHub Issues](https://github.com/SecureNode-Call-Identidy-SDK/apple-ios-sdk/issues)
 
