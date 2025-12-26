@@ -14,6 +14,7 @@ public class SecureNodeSDK {
     private let keychainManager: KeychainManager
     private let imageCache: ImageCache
     private let session: URLSession
+    private let runtimeConfig = RuntimeConfigStore()
     
     /**
      * Initialize the SDK
@@ -67,6 +68,11 @@ public class SecureNodeSDK {
             case .success(let response):
                 // Store in local database
                 self?.database.saveBranding(response.branding)
+
+                // Persist config (non-breaking) so call handling can gate assistance when capped/disabled.
+                if let cfg = response.config {
+                    self?.runtimeConfig.setBrandingEnabled(cfg.brandingEnabled ?? true)
+                }
                 
                 // Pre-cache images in background
                 response.branding.forEach { branding in
@@ -101,14 +107,97 @@ public class SecureNodeSDK {
         // Fallback to API lookup
         apiClient.lookupBranding(phoneNumber: phoneNumber) { [weak self] result in
             switch result {
-            case .success(let branding):
-                if let branding = branding, branding.brandName != nil {
+            case .success(let brandingOpt):
+                if let branding = brandingOpt, branding.brandName != nil {
                     // Cache for next time
                     self?.database.saveBranding([branding])
+                    completion(.success(branding))
+                } else {
+                    completion(.success(BrandingInfo(
+                        phoneNumberE164: phoneNumber,
+                        brandName: nil,
+                        logoUrl: nil,
+                        callReason: nil,
+                        updatedAt: ""
+                    )))
                 }
-                completion(result)
             case .failure(let error):
                 completion(.failure(error))
+            }
+        }
+    }
+
+    /**
+     * Record a billing/audit event for an incoming call when SecureNode assisted the display.
+     *
+     * We keep it simple: send outcome="assisted". Server decides whether it's counted (caps/ownership).
+     */
+    public func recordAssistedEvent(
+        phoneNumberE164: String,
+        surface: String = "callkit",
+        displayedAt: String? = nil,
+        completion: ((Result<BrandingEventResponse, Error>) -> Void)? = nil
+    ) {
+        apiClient.recordEvent(
+            phoneNumberE164: phoneNumberE164,
+            outcome: "assisted",
+            surface: surface,
+            displayedAt: displayedAt
+        ) { result in
+            // Keep local gate in sync with server caps if returned.
+            if case .success(let resp) = result, let enabled = resp.config?.brandingEnabled {
+                self.runtimeConfig.setBrandingEnabled(enabled)
+            }
+            completion?(result)
+        }
+    }
+
+    /**
+     * Convenience: apply SecureNode branding for an incoming call and emit billing event when assisted.
+     *
+     * Intended for VoIP/CallKit flows where your app owns the call event.
+     * - If branding is disabled by server policy/caps, we report the call without branding and do NOT bill.
+     */
+    public func assistIncomingCall(
+        uuid: UUID,
+        phoneNumber: String,
+        provider: CXProvider,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        let enabled = runtimeConfig.isBrandingEnabled()
+
+        // Always report the call; branding is optional.
+        func report(update: CXCallUpdate, assisted: Bool) {
+            provider.reportNewIncomingCall(with: uuid, update: update) { err in
+                if assisted && err == nil {
+                    self.recordAssistedEvent(phoneNumberE164: phoneNumber, surface: "callkit", completion: nil)
+                }
+                completion?(err)
+            }
+        }
+
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .phoneNumber, value: phoneNumber)
+
+        guard enabled else {
+            update.localizedCallerName = phoneNumber
+            report(update: update, assisted: false)
+            return
+        }
+
+        getBranding(for: phoneNumber) { result in
+            switch result {
+            case .success(let branding):
+                if let name = branding.brandName, !name.isEmpty {
+                    update.localizedCallerName = name
+                    report(update: update, assisted: true)
+                } else {
+                    update.localizedCallerName = phoneNumber
+                    report(update: update, assisted: false)
+                }
+            case .failure:
+                update.localizedCallerName = phoneNumber
+                report(update: update, assisted: false)
             }
         }
     }
@@ -134,6 +223,24 @@ public struct SecureNodeConfig {
     public init(apiURL: URL, apiKey: String = "") {
         self.apiURL = apiURL
         self.apiKey = apiKey
+    }
+}
+
+/**
+ * Minimal local config gate (used to avoid giving free "assistance" when server caps disable branding).
+ */
+final class RuntimeConfigStore {
+    private let defaults = UserDefaults.standard
+    private let keyBrandingEnabled = "securenode_branding_enabled"
+
+    func isBrandingEnabled() -> Bool {
+        // Default allow until server tells us otherwise.
+        if defaults.object(forKey: keyBrandingEnabled) == nil { return true }
+        return defaults.bool(forKey: keyBrandingEnabled)
+    }
+
+    func setBrandingEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: keyBrandingEnabled)
     }
 }
 

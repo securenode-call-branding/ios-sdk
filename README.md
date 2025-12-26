@@ -95,52 +95,17 @@ secureNode.syncBranding(since: lastSyncTimestamp) { result in
 
 ### CallKit Integration
 
-The SDK provides a ready-to-use `CallKitManager` that handles incoming calls automatically:
+Use the SDK’s one-call helper to apply branding + emit the **billable assisted event** automatically:
 
 ```swift
 import CallKit
 import SecureNodeSDK
 
-class CallKitManager: NSObject {
-    private let provider: CXProvider
-    private let secureNode: SecureNodeSDK
-    
-    override init() {
-        let configuration = CXProviderConfiguration(localizedName: "YourApp")
-        configuration.supportsVideo = false
-        configuration.maximumCallsPerCallGroup = 1
-        configuration.supportedHandleTypes = [.phoneNumber]
-        
-        provider = CXProvider(configuration: configuration)
-        secureNode = SecureNodeSDK(config: config)
-        
-        super.init()
-        provider.setDelegate(self, queue: nil)
-    }
-    
-    func handleIncomingCall(uuid: UUID, phoneNumber: String) {
-        secureNode.getBranding(for: phoneNumber) { [weak self] result in
-            guard let self = self else { return }
-            
-            let update = CXCallUpdate()
-            update.remoteHandle = CXHandle(type: .phoneNumber, value: phoneNumber)
-            
-            switch result {
-            case .success(let branding):
-                update.localizedCallerName = branding.brandName
-                // Apply logo and call reason
-            case .failure:
-                update.localizedCallerName = phoneNumber
-            }
-            
-            self.provider.reportNewIncomingCall(with: uuid, update: update) { error in
-                if let error = error {
-                    print("Failed to report call: \(error)")
-                }
-            }
-        }
-    }
-}
+let provider = CXProvider(configuration: CXProviderConfiguration(localizedName: "YourApp"))
+provider.setDelegate(self, queue: nil)
+
+// When your app receives an incoming VoIP call event:
+secureNode.assistIncomingCall(uuid: uuid, phoneNumber: e164, provider: provider)
 ```
 
 ### Manual Branding Lookup
@@ -166,6 +131,8 @@ Main SDK class for branding operations.
 
 - `syncBranding(since: String?, completion: @escaping (Result<SyncResponse, Error>) -> Void)` - Sync branding data
 - `getBranding(for phoneNumber: String, completion: @escaping (Result<BrandingInfo, Error>) -> Void)` - Lookup single number
+- `assistIncomingCall(uuid: UUID, phoneNumber: String, provider: CXProvider, completion: ((Error?) -> Void)?)` - Apply branding + billable assisted event
+- `recordAssistedEvent(phoneNumberE164: String, surface: String, displayedAt: String?, completion: ((Result<BrandingEventResponse, Error>) -> Void)?)` - Billable assisted event
 
 ### BrandingInfo
 
