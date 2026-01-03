@@ -11,6 +11,7 @@ iOS SDK for SecureNode Call Identity branding integration. Provides native CallK
 - ✅ **Incremental Sync** - Efficient bandwidth usage with delta updates
 - ✅ **Error Handling** - Graceful fallbacks and error recovery
 - ✅ **Thread-Safe** - Safe for use in multi-threaded call handling
+- 🧩 **Secure Voice / SIP (future add-on)** - Ship VoIP dialer capability now, enable later via flags (SIP engine not bundled yet)
 
 ## Installation
 
@@ -48,6 +49,32 @@ let config = SecureNodeConfig(
 )
 
 let secureNode = SecureNodeSDK(config: config)
+```
+
+### Optional: ship Secure Voice (VoIP/SIP) now, enable later
+
+Secure Voice is designed as a **channel add-on**:
+- You can **include it in the app release** but keep it **disabled**.
+- Later you enable it with a **single local flag** (and SecureNode can also gate it server-side via `voip_dialer_enabled`).
+
+Enabled only when BOTH are true:
+- `SecureNodeOptions(enableSecureVoice: true)` (local)
+- `voip_dialer_enabled = true` from the sync response (server)
+
+```swift
+import SecureNodeSDK
+
+let secureNode = SecureNodeSDK(
+  config: config,
+  options: SecureNodeOptions(
+    enableSecureVoice: true,
+    sip: SecureNodeSipConfig(
+      server: "sip:pbx.example.com",
+      username: "user",
+      password: "pass"
+    )
+  )
+)
 ```
 
 ### 2. Enable VoIP Background Mode

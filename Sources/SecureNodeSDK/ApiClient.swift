@@ -4,14 +4,90 @@ import Foundation
  * API client for SecureNode branding endpoints
  */
 class ApiClient {
-    private let baseURL: URL
+    private let baseRootURL: URL
+    private let baseApiURL: URL
     private let apiKey: String
     private let session: URLSession
     
     init(baseURL: URL, apiKey: String, session: URLSession) {
-        self.baseURL = baseURL
+        // Accept either:
+        // - https://api.securenode.io        (root)
+        // - https://api.securenode.io/api    (root with /api prefix)
+        //
+        // We normalize to a root base and always try both:
+        // - /mobile/...
+        // - /api/mobile/...
+        let normalizedRoot: URL = {
+            let trimmed = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if trimmed.hasSuffix("/api"), let url = URL(string: String(trimmed.dropLast(4))) {
+                return url
+            }
+            return URL(string: trimmed) ?? baseURL
+        }()
+
+        self.baseRootURL = normalizedRoot
+        self.baseApiURL = normalizedRoot.appendingPathComponent("api")
         self.apiKey = apiKey
         self.session = session
+    }
+
+    private func urlCandidates(_ path: String) -> [URL] {
+        // path example: "mobile/branding/sync"
+        return [
+            baseRootURL.appendingPathComponent(path),
+            baseApiURL.appendingPathComponent(path),
+        ]
+    }
+
+    private func runFirstOK<T>(
+        urls: [URL],
+        build: (URL) -> URLRequest,
+        decode: @escaping (Data) throws -> T,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) {
+        guard let first = urls.first else {
+            completion(.failure(ApiError.invalidURL))
+            return
+        }
+
+        let request = build(first)
+        session.dataTask(with: request) { [weak self] data, response, error in
+            if let error = error {
+                if let self = self, urls.count > 1 {
+                    self.runFirstOK(urls: Array(urls.dropFirst()), build: build, decode: decode, completion: completion)
+                    return
+                }
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            // If this endpoint isn't mounted here, try the next base.
+            if httpResponse.statusCode == 404, let self = self, urls.count > 1 {
+                self.runFirstOK(urls: Array(urls.dropFirst()), build: build, decode: decode, completion: completion)
+                return
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            guard let data = data else {
+                completion(.failure(ApiError.noData))
+                return
+            }
+
+            do {
+                completion(.success(try decode(data)))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
     }
     
     /**
@@ -21,47 +97,27 @@ class ApiClient {
         since: String?,
         completion: @escaping (Result<SyncResponse, Error>) -> Void
     ) {
-        var urlComponents = URLComponents(url: baseURL.appendingPathComponent("mobile/branding/sync"), resolvingAgainstBaseURL: false)
-        
-        if let since = since {
-            urlComponents?.queryItems = [URLQueryItem(name: "since", value: since)]
+        let urls = urlCandidates("mobile/branding/sync").map { base in
+            guard let since = since else { return base }
+            var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            comps?.queryItems = [URLQueryItem(name: "since", value: since)]
+            return comps?.url ?? base
         }
-        
-        guard let url = urlComponents?.url else {
-            completion(.failure(ApiError.invalidURL))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        session.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                completion(.failure(ApiError.invalidResponse))
-                return
-            }
-            
-            guard let data = data else {
-                completion(.failure(ApiError.noData))
-                return
-            }
-            
-            do {
-                let decoder = JSONDecoder()
-                let response = try decoder.decode(SyncResponse.self, from: data)
-                completion(.success(response))
-            } catch {
-                completion(.failure(error))
-            }
-        }.resume()
+
+        runFirstOK(
+            urls: urls,
+            build: { url in
+                var req = URLRequest(url: url)
+                req.httpMethod = "GET"
+                req.setValue(self.apiKey, forHTTPHeaderField: "X-API-Key")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                return req
+            },
+            decode: { data in
+                try JSONDecoder().decode(SyncResponse.self, from: data)
+            },
+            completion: completion
+        )
     }
     
     /**
@@ -71,50 +127,29 @@ class ApiClient {
         phoneNumber: String,
         completion: @escaping (Result<BrandingInfo?, Error>) -> Void
     ) {
-        var urlComponents = URLComponents(url: baseURL.appendingPathComponent("mobile/branding/lookup"), resolvingAgainstBaseURL: false)
-        urlComponents?.queryItems = [URLQueryItem(name: "e164", value: phoneNumber)]
-        
-        guard let url = urlComponents?.url else {
-            completion(.failure(ApiError.invalidURL))
-            return
+        let urls = urlCandidates("mobile/branding/lookup").compactMap { base in
+            var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            comps?.queryItems = [URLQueryItem(name: "e164", value: phoneNumber)]
+            return comps?.url
         }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        session.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                completion(.failure(ApiError.invalidResponse))
-                return
-            }
-            
-            guard let data = data else {
-                completion(.success(nil))
-                return
-            }
-            
-            do {
-                let decoder = JSONDecoder()
-                let response = try decoder.decode(BrandingInfo.self, from: data)
-                
-                // Only return if brand name exists
-                if response.brandName != nil {
-                    completion(.success(response))
-                } else {
-                    completion(.success(nil))
-                }
-            } catch {
-                completion(.failure(error))
-            }
-        }.resume()
+
+        runFirstOK(
+            urls: urls,
+            build: { url in
+                var req = URLRequest(url: url)
+                req.httpMethod = "GET"
+                req.setValue(self.apiKey, forHTTPHeaderField: "X-API-Key")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                return req
+            },
+            decode: { data in
+                // Empty body means "no match" for some deployments
+                if data.isEmpty { return nil }
+                let decoded = try JSONDecoder().decode(BrandingInfo.self, from: data)
+                return decoded.brandName != nil ? decoded : nil
+            },
+            completion: completion
+        )
     }
 
     /**
@@ -129,10 +164,11 @@ class ApiClient {
         displayedAt: String? = nil,
         completion: @escaping (Result<BrandingEventResponse, Error>) -> Void
     ) {
-        // Prefer /mobile/*, fallback to /api/mobile/* for deployments that include /api prefix.
-        let paths = ["mobile/branding/event", "api/mobile/branding/event"]
+        // Try both base mounts:
+        // - {root}/mobile/...
+        // - {root}/api/mobile/...
         recordEventTryPaths(
-            paths: paths,
+            paths: urlCandidates("mobile/branding/event").map { $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) },
             phoneNumberE164: phoneNumberE164,
             outcome: outcome,
             surface: surface,
@@ -154,7 +190,7 @@ class ApiClient {
             return
         }
 
-        let url = baseURL.appendingPathComponent(first)
+        let url = URL(string: "\(baseRootURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(first)") ?? baseRootURL
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
@@ -224,6 +260,148 @@ class ApiClient {
             }
         }.resume()
     }
+
+    func registerDevice(
+        deviceId: String,
+        platform: String,
+        deviceType: String?,
+        osVersion: String?,
+        appVersion: String?,
+        sdkVersion: String?,
+        customerName: String?,
+        customerAccountNumber: String?,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urls = urlCandidates("mobile/device/register")
+        runFirstOK(
+            urls: urls,
+            build: { url in
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue(self.apiKey, forHTTPHeaderField: "X-API-Key")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                let body: [String: Any] = [
+                    "device_id": deviceId,
+                    "platform": platform,
+                    "device_type": deviceType as Any,
+                    "os_version": osVersion as Any,
+                    "app_version": appVersion as Any,
+                    "sdk_version": sdkVersion as Any,
+                    "customer_name": customerName as Any,
+                    "customer_account_number": customerAccountNumber as Any
+                ]
+                req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                return req
+            },
+            decode: { _ in () },
+            completion: completion
+        )
+    }
+
+    /**
+     * Best-effort telemetry/log ingestion.
+     * Uses /mobile/device/log with fallback to /api/mobile/device/log.
+     */
+    func sendDeviceLog(
+        deviceId: String,
+        level: String,
+        message: String,
+        meta: [String: Any]?,
+        occurredAt: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        sendDeviceLogTryPaths(
+            paths: urlCandidates("mobile/device/log").map { $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) },
+            deviceId: deviceId,
+            level: level,
+            message: message,
+            meta: meta,
+            occurredAt: occurredAt,
+            completion: completion
+        )
+    }
+
+    private func sendDeviceLogTryPaths(
+        paths: [String],
+        deviceId: String,
+        level: String,
+        message: String,
+        meta: [String: Any]?,
+        occurredAt: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard let first = paths.first else {
+            completion(.failure(ApiError.invalidURL))
+            return
+        }
+
+        let url = URL(string: "\(baseRootURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(first)") ?? baseRootURL
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "device_id": deviceId,
+            "level": level,
+            "message": String(message.prefix(1800)),
+            "occurred_at": occurredAt
+        ]
+        if let meta = meta {
+            body["meta"] = meta
+        }
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        session.dataTask(with: request) { [weak self] _, response, error in
+            if let error = error {
+                if let self = self, paths.count > 1 {
+                    self.sendDeviceLogTryPaths(
+                        paths: Array(paths.dropFirst()),
+                        deviceId: deviceId,
+                        level: level,
+                        message: message,
+                        meta: meta,
+                        occurredAt: occurredAt,
+                        completion: completion
+                    )
+                    return
+                }
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            if httpResponse.statusCode == 404, let self = self, paths.count > 1 {
+                self.sendDeviceLogTryPaths(
+                    paths: Array(paths.dropFirst()),
+                    deviceId: deviceId,
+                    level: level,
+                    message: message,
+                    meta: meta,
+                    occurredAt: occurredAt,
+                    completion: completion
+                )
+                return
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            completion(.success(()))
+        }.resume()
+    }
 }
 
 /**
@@ -234,6 +412,7 @@ public struct BrandingInfo: Codable {
     public let brandName: String?
     public let logoUrl: String?
     public let callReason: String?
+    public let brandId: String?
     public let updatedAt: String
     
     enum CodingKeys: String, CodingKey {
@@ -242,6 +421,7 @@ public struct BrandingInfo: Codable {
         case brandName = "brand_name"
         case logoUrl = "logo_url"
         case callReason = "call_reason"
+        case brandId = "brand_id"
         case updatedAt = "updated_at"
     }
 
@@ -254,6 +434,7 @@ public struct BrandingInfo: Codable {
         brandName = try? c.decodeIfPresent(String.self, forKey: .brandName)
         logoUrl = try? c.decodeIfPresent(String.self, forKey: .logoUrl)
         callReason = try? c.decodeIfPresent(String.self, forKey: .callReason)
+        brandId = try? c.decodeIfPresent(String.self, forKey: .brandId)
         updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
     }
 }
