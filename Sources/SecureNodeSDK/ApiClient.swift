@@ -95,12 +95,19 @@ class ApiClient {
      */
     func syncBranding(
         since: String?,
+        deviceId: String?,
         completion: @escaping (Result<SyncResponse, Error>) -> Void
     ) {
         let urls = urlCandidates("mobile/branding/sync").map { base in
-            guard let since = since else { return base }
             var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
-            comps?.queryItems = [URLQueryItem(name: "since", value: since)]
+            var items: [URLQueryItem] = []
+            if let since = since {
+                items.append(URLQueryItem(name: "since", value: since))
+            }
+            if let deviceId = deviceId, !deviceId.isEmpty {
+                items.append(URLQueryItem(name: "device_id", value: deviceId))
+            }
+            comps?.queryItems = items.isEmpty ? nil : items
             return comps?.url ?? base
         }
 
@@ -116,6 +123,38 @@ class ApiClient {
             decode: { data in
                 try JSONDecoder().decode(SyncResponse.self, from: data)
             },
+            completion: completion
+        )
+    }
+
+    /**
+     * Best-effort: record a branding imprint (call branding activity).
+     * Drives per-device activity sparklines in the portal.
+     */
+    func recordImprint(
+        deviceId: String,
+        phoneNumberE164: String,
+        displayedAt: String? = nil,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urls = urlCandidates("mobile/branding/imprint")
+        runFirstOK(
+            urls: urls,
+            build: { url in
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue(self.apiKey, forHTTPHeaderField: "X-API-Key")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+                let body: [String: Any] = [
+                    "phone_number_e164": phoneNumberE164,
+                    "displayed_at": displayedAt ?? ISO8601DateFormatter().string(from: Date()),
+                    "device_id": deviceId
+                ]
+                req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                return req
+            },
+            decode: { _ in () },
             completion: completion
         )
     }

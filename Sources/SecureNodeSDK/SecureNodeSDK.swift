@@ -15,6 +15,7 @@ public class SecureNodeSDK {
     private let keychainManager: KeychainManager
     private let imageCache: ImageCache
     private let session: URLSession
+    private let trustDelegate: URLSessionDelegate?
     private let runtimeConfig = RuntimeConfigStore()
     private let deviceIdentity = DeviceIdentity()
     private var autoSyncTimer: DispatchSourceTimer?
@@ -44,11 +45,13 @@ public class SecureNodeSDK {
         
         let apiKey = keychainManager.getApiKey() ?? config.apiKey
         
-        // Initialize URL session
+        // Initialize URL session (trust system roots + SecureNode client CA).
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 10
         sessionConfig.timeoutIntervalForResource = 10
-        self.session = URLSession(configuration: sessionConfig)
+        let delegate = SecureNodeTrustDelegate()
+        self.trustDelegate = delegate.isEnabled ? delegate : nil
+        self.session = URLSession(configuration: sessionConfig, delegate: self.trustDelegate, delegateQueue: nil)
         
         // Initialize API client
         apiClient = ApiClient(baseURL: config.apiURL, apiKey: apiKey, session: session)
@@ -99,7 +102,8 @@ public class SecureNodeSDK {
         completion: @escaping (Result<SyncResponse, Error>) -> Void
     ) {
         let startedAt = Date()
-        apiClient.syncBranding(since: since) { [weak self] result in
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        apiClient.syncBranding(since: since, deviceId: deviceId) { [weak self] result in
             switch result {
             case .success(let response):
                 // Store in local database
@@ -423,6 +427,11 @@ public class SecureNodeSDK {
             provider.reportNewIncomingCall(with: uuid, update: update) { err in
                 if assisted && err == nil {
                     self.recordCallEvent(phoneNumberE164: phoneNumber, outcome: "assisted", surface: "callkit", completion: nil)
+                    // Best-effort: imprint for per-device activity (never blocks call UX)
+                    let deviceId = self.deviceIdentity.getOrCreateDeviceId()
+                    self.apiClient.recordImprint(deviceId: deviceId, phoneNumberE164: phoneNumber) { _ in
+                        // ignore
+                    }
                 }
                 if assisted {
                     self.trackTelemetry(
@@ -484,6 +493,72 @@ public class SecureNodeSDK {
         let cutoffTime = Date().addingTimeInterval(-retentionDays)
         database.deleteOldBranding(before: cutoffTime)
         imageCache.cleanupOldImages()
+    }
+}
+
+/// URLSessionDelegate that trusts the platform roots plus the SecureNode client CA (prod-ca-2021).
+final class SecureNodeTrustDelegate: NSObject, URLSessionDelegate {
+    private let anchor: SecCertificate?
+
+    var isEnabled: Bool { anchor != nil }
+
+    override init() {
+        // DER base64 for prod-ca-2021 (no BEGIN/END lines)
+        let b64 =
+            "MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL" +
+            "BQAwazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5l" +
+            "dyBDYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJh" +
+            "c2UgUm9vdCAyMDIxIENBMB4XDTIxMDQyODEwNTY1M1oXDTMxMDQyNjEwNTY1M1ow" +
+            "azELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5ldyBD" +
+            "YXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJhc2Ug" +
+            "Um9vdCAyMDIxIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQXW" +
+            "QyHOB+qR2GJobCq/CBmQ40G0oDmCC3mzVnn8sv4XNeWtE5XcEL0uVih7Jo4Dkx1Q" +
+            "DmGHBH1zDfgs2qXiLb6xpw/CKQPypZW1JssOTMIfQppNQ87K75Ya0p25Y3ePS2t2" +
+            "GtvHxNjUV6kjOZjEn2yWEcBdpOVCUYBVFBNMB4YBHkNRDa/+S4uywAoaTWnCJLUi" +
+            "cvTlHmMw6xSQQn1UfRQHk50DMCEJ7Cy1RxrZJrkXXRP3LqQL2ijJ6F4yMfh+Gyb4" +
+            "O4XajoVj/+R4GwywKYrrS8PrSNtwxr5StlQO8zIQUSMiq26wM8mgELFlS/32Uclt" +
+            "NaQ1xBRizkzpZct9DwIDAQABo2AwXjALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFKjX" +
+            "uXY32CztkhImng4yJNUtaUYsMB8GA1UdIwQYMBaAFKjXuXY32CztkhImng4yJNUt" +
+            "aUYsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAB8spzNn+4VU" +
+            "tVxbdMaX+39Z50sc7uATmus16jmmHjhIHz+l/9GlJ5KqAMOx26mPZgfzG7oneL2b" +
+            "VW+WgYUkTT3XEPFWnTp2RJwQao8/tYPXWEJDc0WVQHrpmnWOFKU/d3MqBgBm5y+6" +
+            "jB81TU/RG2rVerPDWP+1MMcNNy0491CTL5XQZ7JfDJJ9CCmXSdtTl4uUQnSuv/Qx" +
+            "Cea13BX2ZgJc7Au30vihLhub52De4P/4gonKsNHYdbWjg7OWKwNv/zitGDVDB9Y2" +
+            "CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P" +
+            "o/bKiIz+Fq8="
+
+        if let data = Data(base64Encoded: b64),
+           let cert = SecCertificateCreateWithData(nil, data as CFData) {
+            self.anchor = cert
+        } else {
+            self.anchor = nil
+        }
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard
+            challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+            let serverTrust = challenge.protectionSpace.serverTrust,
+            let anchor = anchor
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        // Add our CA, but still allow system roots too.
+        SecTrustSetAnchorCertificates(serverTrust, [anchor] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(serverTrust, false)
+
+        if SecTrustEvaluateWithError(serverTrust, nil) {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        } else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
     }
 }
 
