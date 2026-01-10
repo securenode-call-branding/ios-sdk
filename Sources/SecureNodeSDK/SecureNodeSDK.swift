@@ -215,7 +215,8 @@ public class SecureNodeSDK {
         }
         
         // Fallback to API lookup
-        apiClient.lookupBranding(phoneNumber: phoneNumber) { [weak self] result in
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        apiClient.lookupBranding(phoneNumber: phoneNumber, deviceId: deviceId) { [weak self] result in
             switch result {
             case .success(let brandingOpt):
                 if let branding = brandingOpt, branding.brandName != nil {

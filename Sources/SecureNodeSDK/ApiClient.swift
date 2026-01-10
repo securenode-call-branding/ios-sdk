@@ -164,11 +164,16 @@ class ApiClient {
      */
     func lookupBranding(
         phoneNumber: String,
+        deviceId: String?,
         completion: @escaping (Result<BrandingInfo?, Error>) -> Void
     ) {
         let urls = urlCandidates("mobile/branding/lookup").compactMap { base in
             var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
-            comps?.queryItems = [URLQueryItem(name: "e164", value: phoneNumber)]
+            var items: [URLQueryItem] = [URLQueryItem(name: "e164", value: phoneNumber)]
+            if let deviceId = deviceId, !deviceId.isEmpty {
+                items.append(URLQueryItem(name: "device_id", value: deviceId))
+            }
+            comps?.queryItems = items
             return comps?.url
         }
 
