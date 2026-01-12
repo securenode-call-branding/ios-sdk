@@ -25,13 +25,13 @@ Add the following to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/SecureNode-Call-Identidy-SDK/apple-ios-sdk.git", from: "1.0.0")
+    .package(url: "https://github.com/securenode-call-branding/ios-sdk.git", from: "1.0.0")
 ]
 ```
 
 Or add via Xcode:
 1. File → Add Packages...
-2. Enter: `https://github.com/SecureNode-Call-Identidy-SDK/apple-ios-sdk.git`
+2. Enter: `https://github.com/securenode-call-branding/ios-sdk.git`
 3. Select version: `1.0.0`
 
 ### CocoaPods
@@ -127,10 +127,10 @@ struct BrandingInfo {
 
 ## License
 
-GPL-3.0
+Apache-2.0
 
 ## Support
 
 - Documentation: [https://verify.securenode.io/sdk](https://verify.securenode.io/sdk)
-- Issues: [GitHub Issues](https://github.com/SecureNode-Call-Identidy-SDK/apple-ios-sdk/issues)
+- Issues: [GitHub Issues](https://github.com/securenode-call-branding/ios-sdk/issues)
 
