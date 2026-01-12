@@ -1,12 +1,16 @@
 # SecureNode iOS SDK
 
-iOS SDK for SecureNode Call Identity branding integration. Provides native CallKit integration for displaying branded caller information during incoming calls.
+iOS SDK for SecureNode Call Identity branding integration.
+
+This SDK is **headless** (no UI). On iOS, production-grade caller ID uses **both**:
+- **Call Directory Extension** for OS-managed caller ID **labels**
+- **Contacts sync** for managed contact **photos**
 
 ## Features
 
-- ✅ **Native CallKit Integration** - Seamless iOS call interception
-- ✅ **Local Database Caching** - SQLite database for instant branding lookups
-- ✅ **Image Caching** - Automatic logo/image caching for offline support
+- ✅ **Call Directory snapshots (App Group)** - Atomic, validated snapshots for the extension to read
+- ✅ **Call Directory reload policy** - Host app calls `SecureNode.reloadCallDirectoryIfNeeded()`
+- ✅ **Managed Contacts sync** - SecureNode-managed contacts with photos (permission-gated)
 - ✅ **Secure API Key Management** - Keychain storage for API credentials
 - ✅ **Incremental Sync** - Efficient bandwidth usage with delta updates
 - ✅ **Error Handling** - Graceful fallbacks and error recovery
@@ -38,128 +42,56 @@ pod 'SecureNodeSDK', '~> 1.0.0'
 
 ## Quick Start
 
-### 1. Initialize the SDK
+### 1. Configure the headless SDK
 
 ```swift
 import SecureNodeSDK
 
-let config = SecureNodeConfig(
-    apiURL: URL(string: "https://api.securenode.io")!,
-    apiKey: "your-api-key-here" // Get from Portal → Settings → API Keys
-)
-
-let secureNode = SecureNodeSDK(config: config)
+SecureNode.configure(.init(
+  apiURL: URL(string: "https://verify.securenode.io")!,
+  apiKey: "your-api-key-here", // Portal → API Access
+  appGroupId: "group.com.customer.app.securenode",
+  callDirectoryExtensionBundleId: "com.customer.app.CallDirectoryExtension"
+))
 ```
 
-### Optional: ship Secure Voice (VoIP/SIP) now, enable later
-
-Secure Voice is designed as a **channel add-on**:
-- You can **include it in the app release** but keep it **disabled**.
-- Later you enable it with a **single local flag** (and SecureNode can also gate it server-side via `voip_dialer_enabled`).
-
-Enabled only when BOTH are true:
-- `SecureNodeOptions(enableSecureVoice: true)` (local)
-- `voip_dialer_enabled = true` from the sync response (server)
+### 2. Sync + reload Call Directory (host app)
 
 ```swift
-import SecureNodeSDK
-
-let secureNode = SecureNodeSDK(
-  config: config,
-  options: SecureNodeOptions(
-    enableSecureVoice: true,
-    sip: SecureNodeSipConfig(
-      server: "sip:pbx.example.com",
-      username: "user",
-      password: "pass"
-    )
-  )
-)
+let report = try await SecureNode.sync()
+_ = try await SecureNode.reloadCallDirectoryIfNeeded()
 ```
 
-### 2. Enable VoIP Background Mode
+### 3. Call Directory Extension (required for OS labels)
 
-Add to your `Info.plist`:
+The extension is a **separate target** inside the customer app project.
+Use the reference handler in:
 
-```xml
-<key>UIBackgroundModes</key>
-<array>
-    <string>voip</string>
-</array>
-```
+- `ios-sdk/Examples/SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift`
 
-### 3. Request CallKit Permissions
+The extension reads the App Group snapshot and loads labels into the OS.
 
-```swift
-import CallKit
+### 4. Contacts permission (for photos)
 
-let provider = CXProvider(configuration: CXProviderConfiguration(localizedName: "YourApp"))
-// Permissions are requested automatically when reporting calls
-```
-
-### 4. Sync Branding Data
-
-```swift
-// Initial sync
-secureNode.syncBranding { result in
-    switch result {
-    case .success(let response):
-        // Branding data cached locally
-        print("Synced \(response.branding.count) branding records")
-    case .failure(let error):
-        // Handle error
-        print("Sync failed: \(error)")
-    }
-}
-
-// Incremental sync (periodically)
-secureNode.syncBranding(since: lastSyncTimestamp) { result in
-    // Only updates since last sync
-}
-```
+Contacts sync is attempted when permission is **granted or not yet determined**.
+If permission is denied, the SDK continues without Contacts and caller ID labels still work via Call Directory.
 
 ## Usage
 
-### CallKit Integration
-
-Use the SDK’s one-call helper to apply branding + emit the **billable assisted event** automatically:
+### Manual lookup (optional)
 
 ```swift
-import CallKit
-import SecureNodeSDK
-
-let provider = CXProvider(configuration: CXProviderConfiguration(localizedName: "YourApp"))
-provider.setDelegate(self, queue: nil)
-
-// When your app receives an incoming VoIP call event:
-secureNode.assistIncomingCall(uuid: uuid, phoneNumber: e164, provider: provider)
-```
-
-### Manual Branding Lookup
-
-```swift
-secureNode.getBranding(for: "+1234567890") { result in
-    switch result {
-    case .success(let branding):
-        // Use branding.brandName, branding.logoUrl, branding.callReason
-    case .failure(let error):
-        // Handle error
-    }
-}
+// Use your existing app’s call handling to decide when to do lookups.
+// The OS caller ID labels come from Call Directory snapshots.
 ```
 
 ## API Reference
 
-### SecureNodeSDK
-
-Main SDK class for branding operations.
-
-#### Methods
-
-- `syncBranding(since: String?, completion: @escaping (Result<SyncResponse, Error>) -> Void)` - Sync branding data
-- `getBranding(for phoneNumber: String, completion: @escaping (Result<BrandingInfo, Error>) -> Void)` - Lookup single number
-- `assistIncomingCall(uuid: UUID, phoneNumber: String, provider: CXProvider, completion: ((Error?) -> Void)?)` - Apply branding + billable assisted event
-- `recordAssistedEvent(phoneNumberE164: String, surface: String, displayedAt: String?, completion: ((Result<BrandingEventResponse, Error>) -> Void)?)` - Billable assisted event
+### SecureNode (Headless)
+- `configure(_:)`
+- `sync()`
+- `reloadCallDirectoryIfNeeded()`
+- `health()`
 
 ### BrandingInfo
 
@@ -179,8 +111,7 @@ struct BrandingInfo {
 
 - API keys are stored securely using iOS Keychain
 - All network requests use HTTPS
-- Local database is encrypted
-- No sensitive data in logs
+- Directory snapshots are validated (hash + schema) before being activated
 
 ## Requirements
 
