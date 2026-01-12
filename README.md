@@ -71,6 +71,12 @@ Use the reference handler in:
 
 The extension reads the App Group snapshot and loads labels into the OS.
 
+### 3a. Host app refresh pattern (recommended)
+
+See:
+
+- `ios-sdk/Examples/SecureNodeHostAppSnippet/README.md`
+
 ### 4. Contacts permission (for photos)
 
 Contacts sync is attempted when permission is **granted or not yet determined**.
