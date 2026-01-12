@@ -25,7 +25,9 @@ final class SecureNodeCore {
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 15
         sessionConfig.timeoutIntervalForResource = 15
-        self.session = URLSession(configuration: sessionConfig)
+        // Keep existing trust behavior (system roots + SecureNode CA) for parity with the older SDK.
+        let trust = SecureNodeTrustDelegate()
+        self.session = URLSession(configuration: sessionConfig, delegate: trust.isEnabled ? trust : nil, delegateQueue: nil)
 
         self.apiClient = ApiClient(baseURL: config.apiURL, apiKey: apiKey, session: session)
         self.store = SecureNodeAppGroupStore(appGroupId: config.appGroupId)
@@ -39,8 +41,8 @@ final class SecureNodeCore {
             platform: "ios",
             deviceType: nil,
             osVersion: "\(ProcessInfo.processInfo.operatingSystemVersionString)",
-            appVersion: nil,
-            sdkVersion: nil,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+            sdkVersion: Bundle.module.infoDictionary?["CFBundleShortVersionString"] as? String,
             customerName: nil,
             customerAccountNumber: nil
         ) { _ in }
@@ -74,6 +76,8 @@ final class SecureNodeCore {
         // Reload policy is not automatic: host explicitly calls reloadCallDirectoryIfNeeded().
         // But we update health state.
         reloadPolicy.recordLastSyncNow()
+        // Best-effort device update (idempotent; never blocks sync success).
+        postDeviceUpdateBestEffort()
 
         return SecureNodeSyncReport(
             syncedAt: response.syncedAt,
@@ -86,6 +90,37 @@ final class SecureNodeCore {
             photosApplied: contactsResult.photosApplied,
             photoFailures: contactsResult.photoFailures
         )
+    }
+
+    private func postDeviceUpdateBestEffort() {
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        let os = "\(ProcessInfo.processInfo.operatingSystemVersionString)"
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let sdkVersion = Bundle.module.infoDictionary?["CFBundleShortVersionString"] as? String
+
+        // contacts_enabled is authoritative (permission gate)
+        let contactsEnabled = (CNContactStore.authorizationStatus(for: .contacts) == .authorized)
+
+        CXCallDirectoryManager.sharedInstance.getEnabledStatusForExtension(withIdentifier: config.callDirectoryExtensionBundleId) { status, _ in
+            let callDirEnabled: Bool? = (status == .enabled)
+
+            let caps: [String: Any] = [
+                "contacts_enabled": contactsEnabled,
+                "call_directory_enabled": callDirEnabled as Any
+            ]
+
+            self.apiClient.updateDevice(
+                deviceId: deviceId,
+                platform: "ios",
+                osVersion: os,
+                appVersion: appVersion,
+                sdkVersion: sdkVersion,
+                capabilities: caps,
+                lastSeen: ISO8601DateFormatter().string(from: Date())
+            ) { _ in
+                // ignore
+            }
+        }
     }
 
     func reloadCallDirectoryIfNeeded() async throws -> SecureNodeReloadReport {

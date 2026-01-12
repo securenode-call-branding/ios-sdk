@@ -446,6 +446,123 @@ class ApiClient {
             completion(.success(()))
         }.resume()
     }
+
+    /**
+     * Authoritative, idempotent device state update.
+     * Uses /mobile/device/update with fallback to /api/mobile/device/update.
+     */
+    func updateDevice(
+        deviceId: String,
+        platform: String,
+        osVersion: String?,
+        appVersion: String?,
+        sdkVersion: String?,
+        capabilities: [String: Any]?,
+        lastSeen: String?,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        updateDeviceTryPaths(
+            paths: urlCandidates("mobile/device/update").map { $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) },
+            deviceId: deviceId,
+            platform: platform,
+            osVersion: osVersion,
+            appVersion: appVersion,
+            sdkVersion: sdkVersion,
+            capabilities: capabilities,
+            lastSeen: lastSeen,
+            completion: completion
+        )
+    }
+
+    private func updateDeviceTryPaths(
+        paths: [String],
+        deviceId: String,
+        platform: String,
+        osVersion: String?,
+        appVersion: String?,
+        sdkVersion: String?,
+        capabilities: [String: Any]?,
+        lastSeen: String?,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard let first = paths.first else {
+            completion(.failure(ApiError.invalidURL))
+            return
+        }
+
+        let url = URL(string: "\(baseRootURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/\(first)") ?? baseRootURL
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "device_id": deviceId,
+            "platform": platform,
+            "os_version": osVersion as Any,
+            "app_version": appVersion as Any,
+            "sdk_version": sdkVersion as Any,
+            "last_seen": lastSeen as Any
+        ]
+        if let capabilities = capabilities {
+            body["capabilities"] = capabilities
+        }
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        session.dataTask(with: request) { [weak self] _, response, error in
+            if let error = error {
+                if let self = self, paths.count > 1 {
+                    self.updateDeviceTryPaths(
+                        paths: Array(paths.dropFirst()),
+                        deviceId: deviceId,
+                        platform: platform,
+                        osVersion: osVersion,
+                        appVersion: appVersion,
+                        sdkVersion: sdkVersion,
+                        capabilities: capabilities,
+                        lastSeen: lastSeen,
+                        completion: completion
+                    )
+                    return
+                }
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            if httpResponse.statusCode == 404, let self = self, paths.count > 1 {
+                self.updateDeviceTryPaths(
+                    paths: Array(paths.dropFirst()),
+                    deviceId: deviceId,
+                    platform: platform,
+                    osVersion: osVersion,
+                    appVersion: appVersion,
+                    sdkVersion: sdkVersion,
+                    capabilities: capabilities,
+                    lastSeen: lastSeen,
+                    completion: completion
+                )
+                return
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(ApiError.invalidResponse))
+                return
+            }
+
+            completion(.success(()))
+        }.resume()
+    }
 }
 
 /**
