@@ -48,7 +48,7 @@ pod 'SecureNodeSDK', '~> 1.0.0'
 import SecureNodeSDK
 
 SecureNode.configure(.init(
-  apiURL: URL(string: "https://verify.securenode.io")!,
+  apiURL: URL(string: "https://edge.securenode.io")!,
   apiKey: "your-api-key-here", // Portal → API Access
   appGroupId: "group.com.customer.app.securenode",
   callDirectoryExtensionBundleId: "com.customer.app.CallDirectoryExtension"
