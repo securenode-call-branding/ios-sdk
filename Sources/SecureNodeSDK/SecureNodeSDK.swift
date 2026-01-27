@@ -1,5 +1,9 @@
 import Foundation
 import CallKit
+import UIKit
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 /**
  * SecureNode iOS SDK
@@ -332,6 +336,41 @@ public class SecureNodeSDK {
         }
     }
 
+    private func buildEventMeta(
+        base: [String: Any]?,
+        callEventId: String?,
+        deviceId: String,
+        observedAt: String,
+        platform: String,
+        extras: [String: Any] = [:]
+    ) -> [String: Any]? {
+        var meta = base ?? [:]
+        for (key, value) in extras {
+            if meta[key] == nil {
+                meta[key] = value
+            }
+        }
+        if meta["call_event_id"] == nil, let callEventId = callEventId, !callEventId.isEmpty {
+            meta["call_event_id"] = callEventId
+        }
+        if meta["device_id"] == nil {
+            meta["device_id"] = deviceId
+        }
+        if meta["platform"] == nil {
+            meta["platform"] = platform
+        }
+        if meta["observed_at_utc"] == nil {
+            meta["observed_at_utc"] = observedAt
+        }
+        return meta.isEmpty ? nil : meta
+    }
+
+    private func encodeMetaJson(_ meta: [String: Any]?) -> String? {
+        guard let meta = meta, !meta.isEmpty else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: meta) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     /**
      * Record a ring-time event for an incoming call.
      *
@@ -342,13 +381,76 @@ public class SecureNodeSDK {
         outcome: String,
         surface: String = "callkit",
         displayedAt: String? = nil,
+        observedAtUtc: String? = nil,
+        callEventId: String? = nil,
+        callerNumberE164: String? = nil,
+        destinationNumberE164: String? = nil,
+        brandingApplied: Bool? = nil,
+        brandingProfileId: String? = nil,
+        identityType: String? = nil,
+        ringDurationSeconds: Int? = nil,
+        callDurationSeconds: Int? = nil,
+        callOutcome: String? = nil,
+        returnCallDetected: Bool? = nil,
+        returnCallLatencySeconds: Int? = nil,
+        trackingMeta: [String: Any]? = nil,
         completion: ((Result<BrandingEventResponse, Error>) -> Void)? = nil
     ) {
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        let observedAt = (observedAtUtc?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? observedAtUtc : nil)
+            ?? displayedAt
+            ?? ISO8601DateFormatter().string(from: Date())
+        let normalizedCallEventId = callEventId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let metaCallEventId = (trackingMeta?["call_event_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let eventKey = (normalizedCallEventId?.isEmpty == false ? normalizedCallEventId : (metaCallEventId?.isEmpty == false ? metaCallEventId : "call_event:\(UUID().uuidString)")) ?? ""
+        var extras: [String: Any] = [:]
+        if let value = callerNumberE164?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            extras["caller_number_e164"] = value
+        }
+        if let value = destinationNumberE164?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            extras["destination_number_e164"] = value
+        }
+        if let brandingApplied = brandingApplied {
+            extras["branding_applied"] = brandingApplied
+        }
+        if let value = brandingProfileId?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            extras["branding_profile_id"] = value
+        }
+        if let value = identityType?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            extras["identity_type"] = value
+        }
+        if let ringDurationSeconds = ringDurationSeconds {
+            extras["ring_duration_seconds"] = ringDurationSeconds
+        }
+        if let callDurationSeconds = callDurationSeconds {
+            extras["call_duration_seconds"] = callDurationSeconds
+        }
+        if let value = callOutcome?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            extras["call_outcome"] = value
+        }
+        if let returnCallDetected = returnCallDetected {
+            extras["return_call_detected"] = returnCallDetected
+        }
+        if let returnCallLatencySeconds = returnCallLatencySeconds {
+            extras["return_call_latency_seconds"] = returnCallLatencySeconds
+        }
+        let meta = buildEventMeta(
+            base: trackingMeta,
+            callEventId: eventKey,
+            deviceId: deviceId,
+            observedAt: observedAt,
+            platform: "ios",
+            extras: extras
+        )
+
         apiClient.recordEvent(
             phoneNumberE164: phoneNumberE164,
             outcome: outcome,
             surface: surface,
-            displayedAt: displayedAt
+            displayedAt: observedAt,
+            deviceId: deviceId,
+            eventKey: eventKey,
+            meta: meta
         ) { [weak self] result in
             switch result {
             case .success(let resp):
@@ -359,12 +461,14 @@ public class SecureNodeSDK {
                 completion?(.success(resp))
             case .failure(let err):
                 // Queue offline and return error to caller (best-effort).
-                let iso = displayedAt ?? ISO8601DateFormatter().string(from: Date())
+                let iso = observedAt
                 self?.database.insertPendingEvent(
                     phoneNumberE164: phoneNumberE164,
                     outcome: outcome,
                     surface: surface,
-                    displayedAt: iso
+                    displayedAt: iso,
+                    eventKey: eventKey,
+                    metaJson: self?.encodeMetaJson(meta)
                 )
                 self?.database.prunePendingEvents(olderThanDays: 7)
                 completion?(.failure(err))
@@ -384,12 +488,27 @@ public class SecureNodeSDK {
 
             // Send sequentially to keep it simple.
             for r in rows {
+                let deviceId = self.deviceIdentity.getOrCreateDeviceId()
+                var parsedMeta: [String: Any]? = nil
+                if let metaJson = r.metaJson, let data = metaJson.data(using: .utf8) {
+                    parsedMeta = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                }
+                let mergedMeta = self.buildEventMeta(
+                    base: parsedMeta,
+                    callEventId: r.eventKey,
+                    deviceId: deviceId,
+                    observedAt: r.displayedAt,
+                    platform: "ios"
+                )
                 group.enter()
                 self.apiClient.recordEvent(
                     phoneNumberE164: r.phoneNumberE164,
                     outcome: r.outcome,
                     surface: r.surface,
-                    displayedAt: r.displayedAt
+                    displayedAt: r.displayedAt,
+                    deviceId: deviceId,
+                    eventKey: r.eventKey,
+                    meta: mergedMeta
                 ) { result in
                     if case .success = result {
                         sentIds.append(r.id)
@@ -430,7 +549,16 @@ public class SecureNodeSDK {
                     self.recordCallEvent(phoneNumberE164: phoneNumber, outcome: "assisted", surface: "callkit", completion: nil)
                     // Best-effort: imprint for per-device activity (never blocks call UX)
                     let deviceId = self.deviceIdentity.getOrCreateDeviceId()
-                    self.apiClient.recordImprint(deviceId: deviceId, phoneNumberE164: phoneNumber) { _ in
+                    let osVersion = UIDevice.current.systemVersion
+                    let deviceModel = self.sha256Hex(UIDevice.current.model)
+                    self.apiClient.recordImprint(
+                        deviceId: deviceId,
+                        phoneNumberE164: phoneNumber,
+                        platform: "ios",
+                        osVersion: osVersion,
+                        deviceModel: deviceModel,
+                        campaignId: self.config.campaignId
+                    ) { _ in
                         // ignore
                     }
                 }
@@ -494,6 +622,18 @@ public class SecureNodeSDK {
         let cutoffTime = Date().addingTimeInterval(-retentionDays)
         database.deleteOldBranding(before: cutoffTime)
         imageCache.cleanupOldImages()
+    }
+
+    private func sha256Hex(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        #if canImport(CryptoKit)
+        if #available(iOS 13.0, *) {
+            let digest = SHA256.hash(data: Data(trimmed.utf8))
+            return digest.map { String(format: "%02x", $0) }.joined()
+        }
+        #endif
+        return nil
     }
 }
 
@@ -569,10 +709,12 @@ final class SecureNodeTrustDelegate: NSObject, URLSessionDelegate {
 public struct SecureNodeConfig {
     public let apiURL: URL
     public let apiKey: String
+    public let campaignId: String?
     
-    public init(apiURL: URL, apiKey: String = "") {
+    public init(apiURL: URL, apiKey: String = "", campaignId: String? = nil) {
         self.apiURL = apiURL
         self.apiKey = apiKey
+        self.campaignId = campaignId
     }
 }
 

@@ -1,136 +1,131 @@
 # SecureNode iOS SDK
 
-iOS SDK for SecureNode Call Identity branding integration.
+iOS SDK for SecureNode Active Caller Identity and Call Branding.
 
-This SDK is **headless** (no UI). On iOS, production-grade caller ID uses **both**:
-- **Call Directory Extension** for OS-managed caller ID **labels**
-- **Contacts sync** for managed contact **photos**
+This SDK is **headless** (no UI). On iOS, production-grade caller identity uses **both**:
+- **Call Directory Extension (CNCallDirectory)** for OS-managed caller ID **labels**
+- **Contacts sync** (permission-gated) for SecureNode-managed contact **photos**
+
+The SDK is designed to be **offline-safe, incremental, and scalable to multi-million device deployments**.
+
+---
 
 ## Features
 
-- ✅ **Call Directory snapshots (App Group)** - Atomic, validated snapshots for the extension to read
-- ✅ **Call Directory reload policy** - Host app calls `SecureNode.reloadCallDirectoryIfNeeded()`
-- ✅ **Managed Contacts sync** - SecureNode-managed contacts with photos (permission-gated)
-- ✅ **Secure API Key Management** - Keychain storage for API credentials
-- ✅ **Incremental Sync** - Efficient bandwidth usage with delta updates
-- ✅ **Error Handling** - Graceful fallbacks and error recovery
-- ✅ **Thread-Safe** - Safe for use in multi-threaded call handling
-- 🧩 **Secure Voice / SIP (future add-on)** - Ship VoIP dialer capability now, enable later via flags (SIP engine not bundled yet)
+- ✅ **Call Directory snapshots (App Group)**  
+  Atomic, validated snapshots for the extension to read (two-phase commit + rollback)
+
+- ✅ **Call Directory reload policy**  
+  Host app calls `SecureNode.reloadCallDirectoryIfNeeded()` — SDK controls throttling
+
+- ✅ **Managed Contacts sync (optional)**  
+  SecureNode-managed contacts with photos (never modifies existing user contacts)
+
+- ✅ **Incremental sync**  
+  Delta-based sync using a `since` cursor (no polling, no full refresh storms)
+
+- ✅ **Local image caching**  
+  Logos are served from `https://assets.securenode.io` and cached locally for instant display
+
+- ✅ **Offline-first / call-safe**  
+  Incoming calls never trigger network requests
+
+- ✅ **Secure API key handling**  
+  API keys stored in iOS Keychain
+
+- ✅ **Thread-safe & call-safe**  
+  Safe for multi-threaded and call-time execution paths
+
+- ✅ **Call event reporting (optional, VoIP/CallKit)**  
+  Use `SecureNodeSDK` to emit `/mobile/branding/event` and imprints when you own the call event
+
+- 🧩 **Secure Voice / SIP (future add-on)**  
+  VoIP dialler capability may be enabled later via flags (SIP engine not bundled)
+
+---
 
 ## Installation
 
 ### Swift Package Manager
 
-Add the following to your `Package.swift`:
-
 ```swift
 dependencies: [
-    .package(url: "https://github.com/securenode-call-branding/ios-sdk.git", from: "1.0.0")
+  .package(
+    url: "https://github.com/securenode-call-branding/ios-sdk.git",
+    from: "1.0.0"
+  )
 ]
 ```
 
-Or add via Xcode:
-1. File → Add Packages...
-2. Enter: `https://github.com/securenode-call-branding/ios-sdk.git`
-3. Select version: `1.0.0`
-
-### CocoaPods
-
-```ruby
-pod 'SecureNodeSDK', '~> 1.0.0'
-```
+---
 
 ## Quick Start
-
-### 1. Configure the headless SDK
 
 ```swift
 import SecureNodeSDK
 
 SecureNode.configure(.init(
-  apiURL: URL(string: "https://edge.securenode.io")!,
-  apiKey: "your-api-key-here", // Portal → API Access
+  apiURL: URL(string: "https://verify.securenode.io")!,
+  apiKey: "your-api-key-here",
   appGroupId: "group.com.customer.app.securenode",
   callDirectoryExtensionBundleId: "com.customer.app.CallDirectoryExtension"
 ))
 ```
 
-### 2. Sync + reload Call Directory (host app)
+Branding logos are always served from `https://assets.securenode.io`.
+
+---
+
+## Sync Behaviour
+
+- First sync is full; subsequent syncs use the stored `since` cursor
+- Host-driven: call `SecureNode.sync()` on app launch or a scheduled task
+- Never sync during incoming call handling
+
+---
+
+## Call event reporting (optional)
+
+Use `SecureNodeSDK` for VoIP / CallKit flows where your app owns the call event.  
+The SDK forwards outcomes to `/mobile/branding/event` and emits imprints when `assistIncomingCall(...)` applies branding.
 
 ```swift
-let report = try await SecureNode.sync()
-_ = try await SecureNode.reloadCallDirectoryIfNeeded()
+import SecureNodeSDK
+
+let sdk = SecureNodeSDK(config: SecureNodeConfig(
+  apiURL: URL(string: "https://verify.securenode.io")!,
+  apiKey: "your-api-key-here",
+  campaignId: "campaign_123" // optional
+))
+
+sdk.recordCallEvent(
+  phoneNumberE164: "+61412345678",
+  outcome: "displayed",
+  callOutcome: "ANSWERED",
+  ringDurationSeconds: 12,
+  callDurationSeconds: 180,
+  callerNumberE164: "+61412345678",
+  destinationNumberE164: "+61234567890"
+)
 ```
 
-### 3. Call Directory Extension (required for OS labels)
+Convenience fields map into event `meta`:
+`call_event_id`, `caller_number_e164`, `destination_number_e164`, `observed_at_utc`, `branding_applied`,
+`branding_profile_id`, `identity_type`, `ring_duration_seconds`, `call_duration_seconds`, `call_outcome`,
+`return_call_detected`, `return_call_latency_seconds`.
 
-The extension is a **separate target** inside the customer app project.
-Use the reference handler in:
-
-- `ios-sdk/Examples/SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift`
-
-The extension reads the App Group snapshot and loads labels into the OS.
-
-### 3a. Host app refresh pattern (recommended)
-
-See:
-
-- `ios-sdk/Examples/SecureNodeHostAppSnippet/README.md`
-
-### 4. Contacts permission (for photos)
-
-Contacts sync is attempted when permission is **granted or not yet determined**.
-If permission is denied, the SDK continues without Contacts and caller ID labels still work via Call Directory.
-
-## Usage
-
-### Manual lookup (optional)
-
-```swift
-// Use your existing app’s call handling to decide when to do lookups.
-// The OS caller ID labels come from Call Directory snapshots.
-```
-
-## API Reference
-
-### SecureNode (Headless)
-- `configure(_:)`
-- `sync()`
-- `reloadCallDirectoryIfNeeded()`
-- `health()`
-
-### BrandingInfo
-
-Struct containing branding information:
-
-```swift
-struct BrandingInfo {
-    let phoneNumberE164: String
-    let brandName: String?
-    let logoUrl: String?
-    let callReason: String?
-    let updatedAt: String
-}
-```
-
-## Security
-
-- API keys are stored securely using iOS Keychain
-- All network requests use HTTPS
-- Directory snapshots are validated (hash + schema) before being activated
+Notes:
+- The SDK does not derive call outcomes; provide them if your app knows them.
+- `call_event_id` is generated if you do not supply one.
 
 ## Requirements
 
-- **iOS**: 13.0+
-- **Swift**: 5.5+
-- **Xcode**: 14.0+
+- iOS 13+
+- Swift 5.5+
+- Xcode 14+
+
+---
 
 ## License
 
 Apache-2.0
-
-## Support
-
-- Documentation: [https://verify.securenode.io/sdk](https://verify.securenode.io/sdk)
-- Issues: [GitHub Issues](https://github.com/securenode-call-branding/ios-sdk/issues)
-

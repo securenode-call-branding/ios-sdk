@@ -52,6 +52,8 @@ class BrandingDatabase {
                 outcome TEXT NOT NULL,
                 surface TEXT,
                 displayed_at TEXT NOT NULL,
+                event_key TEXT,
+                meta_json TEXT,
                 created_at INTEGER NOT NULL
             );
         """
@@ -87,6 +89,19 @@ class BrandingDatabase {
             _ = sqlite3_step(stmt2)
         }
         sqlite3_finalize(stmt2)
+
+        // Best-effort: add event_key/meta_json for existing installs (ignore errors).
+        var alterEventsStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "ALTER TABLE pending_events ADD COLUMN event_key TEXT;", -1, &alterEventsStmt, nil) == SQLITE_OK {
+            _ = sqlite3_step(alterEventsStmt)
+        }
+        sqlite3_finalize(alterEventsStmt)
+
+        var alterEventsStmt2: OpaquePointer?
+        if sqlite3_prepare_v2(db, "ALTER TABLE pending_events ADD COLUMN meta_json TEXT;", -1, &alterEventsStmt2, nil) == SQLITE_OK {
+            _ = sqlite3_step(alterEventsStmt2)
+        }
+        sqlite3_finalize(alterEventsStmt2)
 
         var stmt3: OpaquePointer?
         if sqlite3_prepare_v2(db, createPendingTelemetrySQL, -1, &stmt3, nil) == SQLITE_OK {
@@ -200,11 +215,20 @@ class BrandingDatabase {
         let outcome: String
         let surface: String?
         let displayedAt: String
+        let eventKey: String?
+        let metaJson: String?
         let createdAt: Int64
     }
 
-    func insertPendingEvent(phoneNumberE164: String, outcome: String, surface: String?, displayedAt: String) {
-        let sql = "INSERT INTO pending_events (phone_number_e164, outcome, surface, displayed_at, created_at) VALUES (?, ?, ?, ?, ?);"
+    func insertPendingEvent(
+        phoneNumberE164: String,
+        outcome: String,
+        surface: String?,
+        displayedAt: String,
+        eventKey: String?,
+        metaJson: String?
+    ) {
+        let sql = "INSERT INTO pending_events (phone_number_e164, outcome, surface, displayed_at, event_key, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?);"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
 
@@ -216,14 +240,24 @@ class BrandingDatabase {
             sqlite3_bind_null(statement, 3)
         }
         sqlite3_bind_text(statement, 4, displayedAt, -1, nil)
-        sqlite3_bind_int64(statement, 5, Int64(Date().timeIntervalSince1970))
+        if let eventKey = eventKey {
+            sqlite3_bind_text(statement, 5, eventKey, -1, nil)
+        } else {
+            sqlite3_bind_null(statement, 5)
+        }
+        if let metaJson = metaJson {
+            sqlite3_bind_text(statement, 6, metaJson, -1, nil)
+        } else {
+            sqlite3_bind_null(statement, 6)
+        }
+        sqlite3_bind_int64(statement, 7, Int64(Date().timeIntervalSince1970))
 
         _ = sqlite3_step(statement)
         sqlite3_finalize(statement)
     }
 
     func listPendingEvents(limit: Int) -> [PendingEventRow] {
-        let sql = "SELECT id, phone_number_e164, outcome, surface, displayed_at, created_at FROM pending_events ORDER BY id ASC LIMIT ?;"
+        let sql = "SELECT id, phone_number_e164, outcome, surface, displayed_at, event_key, meta_json, created_at FROM pending_events ORDER BY id ASC LIMIT ?;"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         sqlite3_bind_int(statement, 1, Int32(limit))
@@ -235,8 +269,19 @@ class BrandingDatabase {
             let outcome = String(cString: sqlite3_column_text(statement, 2))
             let surface = sqlite3_column_text(statement, 3) != nil ? String(cString: sqlite3_column_text(statement, 3)) : nil
             let displayedAt = String(cString: sqlite3_column_text(statement, 4))
-            let createdAt = sqlite3_column_int64(statement, 5)
-            rows.append(PendingEventRow(id: id, phoneNumberE164: e164, outcome: outcome, surface: surface, displayedAt: displayedAt, createdAt: createdAt))
+            let eventKey = sqlite3_column_text(statement, 5) != nil ? String(cString: sqlite3_column_text(statement, 5)) : nil
+            let metaJson = sqlite3_column_text(statement, 6) != nil ? String(cString: sqlite3_column_text(statement, 6)) : nil
+            let createdAt = sqlite3_column_int64(statement, 7)
+            rows.append(PendingEventRow(
+                id: id,
+                phoneNumberE164: e164,
+                outcome: outcome,
+                surface: surface,
+                displayedAt: displayedAt,
+                eventKey: eventKey,
+                metaJson: metaJson,
+                createdAt: createdAt
+            ))
         }
         sqlite3_finalize(statement)
         return rows

@@ -135,6 +135,10 @@ class ApiClient {
         deviceId: String,
         phoneNumberE164: String,
         displayedAt: String? = nil,
+        platform: String? = nil,
+        osVersion: String? = nil,
+        deviceModel: String? = nil,
+        campaignId: String? = nil,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let urls = urlCandidates("mobile/branding/imprint")
@@ -146,11 +150,23 @@ class ApiClient {
                 req.setValue(self.apiKey, forHTTPHeaderField: "X-API-Key")
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-                let body: [String: Any] = [
+                var body: [String: Any] = [
                     "phone_number_e164": phoneNumberE164,
                     "displayed_at": displayedAt ?? ISO8601DateFormatter().string(from: Date()),
                     "device_id": deviceId
                 ]
+                if let platform = platform, !platform.isEmpty {
+                    body["platform"] = platform
+                }
+                if let osVersion = osVersion, !osVersion.isEmpty {
+                    body["os_version"] = osVersion
+                }
+                if let deviceModel = deviceModel, !deviceModel.isEmpty {
+                    body["device_model"] = deviceModel
+                }
+                if let campaignId = campaignId, !campaignId.isEmpty {
+                    body["campaign_id"] = campaignId
+                }
                 req.httpBody = try? JSONSerialization.data(withJSONObject: body)
                 return req
             },
@@ -206,6 +222,9 @@ class ApiClient {
         outcome: String,
         surface: String?,
         displayedAt: String? = nil,
+        deviceId: String? = nil,
+        eventKey: String? = nil,
+        meta: [String: Any]? = nil,
         completion: @escaping (Result<BrandingEventResponse, Error>) -> Void
     ) {
         // Try both base mounts:
@@ -240,12 +259,23 @@ class ApiClient {
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "phone_number_e164": phoneNumberE164,
             "outcome": outcome,
-            "surface": surface as Any,
             "displayed_at": displayedAt ?? ISO8601DateFormatter().string(from: Date())
         ]
+        if let surface = surface, !surface.isEmpty {
+            body["surface"] = surface
+        }
+        if let deviceId = deviceId, !deviceId.isEmpty {
+            body["device_id"] = deviceId
+        }
+        if let eventKey = eventKey, !eventKey.isEmpty {
+            body["event_key"] = eventKey
+        }
+        if let meta = meta, !meta.isEmpty {
+            body["meta"] = meta
+        }
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
