@@ -78,8 +78,8 @@ public class SecureNodeSDK {
             // ignore
         }
         
-        // Initialize database
-        database = BrandingDatabase()
+        // Initialize database (single shared instance for process-wide serialized access)
+        database = BrandingDatabase.shared
         
         // Initialize image cache
         imageCache = ImageCache()
