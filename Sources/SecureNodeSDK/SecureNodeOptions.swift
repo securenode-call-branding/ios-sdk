@@ -10,12 +10,15 @@ public struct SecureNodeOptions {
     public let customerName: String?
     public let customerAccountNumber: String?
     public let sip: SecureNodeSipConfig?
+    /// Optional: called when SDK has API result lines to show (e.g. in a debug UI). Called on main thread.
+    public let debugLog: ((String) -> Void)?
 
-    public init(enableSecureVoice: Bool = false, customerName: String? = nil, customerAccountNumber: String? = nil, sip: SecureNodeSipConfig? = nil) {
+    public init(enableSecureVoice: Bool = false, customerName: String? = nil, customerAccountNumber: String? = nil, sip: SecureNodeSipConfig? = nil, debugLog: ((String) -> Void)? = nil) {
         self.enableSecureVoice = enableSecureVoice
         self.customerName = customerName
         self.customerAccountNumber = customerAccountNumber
         self.sip = sip
+        self.debugLog = debugLog
     }
 }
 

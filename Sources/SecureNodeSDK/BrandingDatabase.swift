@@ -1,9 +1,18 @@
 import Foundation
 import SQLite3
 
+/// Active Caller Identity field max lengths (database/API constraints per spec).
+private enum BrandingFieldMaxLength {
+    static let phoneNumberE164 = 20
+    static let brandName = 100
+    static let logoUrl = 2048
+    static let callReason = 200
+}
+
 /**
  * Local SQLite database for branding cache.
  * Use BrandingDatabase.shared for a single process-wide instance; all access is serialized on an internal queue.
+ * All stored fields are clamped to spec max lengths (phone_number_e164 20, brand_name 100, logo_url 2048, call_reason 200).
  */
 class BrandingDatabase {
     static let shared = BrandingDatabase()
@@ -11,6 +20,17 @@ class BrandingDatabase {
     private var db: OpaquePointer?
     private let dbPath: String
     private let queue = DispatchQueue(label: "com.securenode.brandingdb", qos: .utility)
+
+    private static func clamp(_ value: String?, maxLength: Int) -> String? {
+        guard let value = value, !value.isEmpty else { return value }
+        if value.count <= maxLength { return value }
+        return String(value.prefix(maxLength))
+    }
+
+    private static func clampRequired(_ value: String, maxLength: Int) -> String {
+        if value.count <= maxLength { return value }
+        return String(value.prefix(maxLength))
+    }
 
     // Ensure SQLite copies Swift strings safely
     private static let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -117,7 +137,31 @@ class BrandingDatabase {
             sqlite3_close(db)
         }
     }
-    
+
+    private func columnExists(table: String, column: String) -> Bool {
+        let sql = "PRAGMA table_info(\(table));"
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        let colNameIdx = 1
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cStr = sqlite3_column_text(stmt, Int32(colNameIdx)) {
+                let name = String(cString: cStr)
+                if name == column { return true }
+            }
+        }
+        return false
+    }
+
+    private func addColumnIfNeeded(table: String, column: String, def: String) {
+        guard !columnExists(table: table, column: column) else { return }
+        let sql = "ALTER TABLE \(table) ADD COLUMN \(column) \(def);"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        _ = sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+    }
+
     private func createTable() {
         let createBrandingTableSQL = """
             CREATE TABLE IF NOT EXISTS branding (
@@ -164,12 +208,7 @@ class BrandingDatabase {
         }
         sqlite3_finalize(statement)
 
-        // Best-effort: add brand_id column for existing installs (ignore errors).
-        var alterStmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, "ALTER TABLE branding ADD COLUMN brand_id TEXT;", -1, &alterStmt, nil) == SQLITE_OK {
-            _ = sqlite3_step(alterStmt)
-        }
-        sqlite3_finalize(alterStmt)
+        addColumnIfNeeded(table: "branding", column: "brand_id", def: "TEXT")
 
         var stmt2: OpaquePointer?
         if sqlite3_prepare_v2(db, createPendingEventsSQL, -1, &stmt2, nil) == SQLITE_OK {
@@ -181,18 +220,8 @@ class BrandingDatabase {
         }
         sqlite3_finalize(stmt2)
 
-        // Best-effort: add event_key/meta_json for existing installs (ignore errors).
-        var alterEventsStmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, "ALTER TABLE pending_events ADD COLUMN event_key TEXT;", -1, &alterEventsStmt, nil) == SQLITE_OK {
-            _ = sqlite3_step(alterEventsStmt)
-        }
-        sqlite3_finalize(alterEventsStmt)
-
-        var alterEventsStmt2: OpaquePointer?
-        if sqlite3_prepare_v2(db, "ALTER TABLE pending_events ADD COLUMN meta_json TEXT;", -1, &alterEventsStmt2, nil) == SQLITE_OK {
-            _ = sqlite3_step(alterEventsStmt2)
-        }
-        sqlite3_finalize(alterEventsStmt2)
+        addColumnIfNeeded(table: "pending_events", column: "event_key", def: "TEXT")
+        addColumnIfNeeded(table: "pending_events", column: "meta_json", def: "TEXT")
 
         var stmt3: OpaquePointer?
         if sqlite3_prepare_v2(db, createPendingTelemetrySQL, -1, &stmt3, nil) == SQLITE_OK {
@@ -204,18 +233,8 @@ class BrandingDatabase {
         }
         sqlite3_finalize(stmt3)
 
-        // Best-effort: add missing columns for existing installs (ignore errors).
-        var alterTelemetryStmt1: OpaquePointer?
-        if sqlite3_prepare_v2(db, "ALTER TABLE pending_telemetry ADD COLUMN meta_json TEXT;", -1, &alterTelemetryStmt1, nil) == SQLITE_OK {
-            _ = sqlite3_step(alterTelemetryStmt1)
-        }
-        sqlite3_finalize(alterTelemetryStmt1)
-
-        var alterTelemetryStmt2: OpaquePointer?
-        if sqlite3_prepare_v2(db, "ALTER TABLE pending_telemetry ADD COLUMN occurred_at TEXT;", -1, &alterTelemetryStmt2, nil) == SQLITE_OK {
-            _ = sqlite3_step(alterTelemetryStmt2)
-        }
-        sqlite3_finalize(alterTelemetryStmt2)
+        addColumnIfNeeded(table: "pending_telemetry", column: "meta_json", def: "TEXT")
+        addColumnIfNeeded(table: "pending_telemetry", column: "occurred_at", def: "TEXT")
 
         // Helpful index for pruning/ordering
         var idxStmt: OpaquePointer?
@@ -242,12 +261,50 @@ class BrandingDatabase {
     }
     
     /**
+     * List all branding entries (e.g. for demo UI). Ordered by updated_at DESC.
+     */
+    func listAllBranding(limit: Int = 500) -> [BrandingInfo] {
+        queue.sync {
+            listAllBrandingImpl(limit: limit)
+        }
+    }
+
+    /**
      * Get branding for a phone number
      */
     func getBranding(for phoneNumber: String) -> BrandingInfo? {
         queue.sync {
             getBrandingImpl(for: phoneNumber)
         }
+    }
+
+    private func listAllBrandingImpl(limit: Int) -> [BrandingInfo] {
+        let sql = "SELECT phone_number_e164, brand_name, logo_url, call_reason, brand_id, updated_at FROM branding ORDER BY updated_at DESC LIMIT ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_int(statement, 1, Int32(limit))
+        var result: [BrandingInfo] = []
+        let dateFormatter = ISO8601DateFormatter()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let e164 = columnText(statement, 0) ?? ""
+            let brandName = columnText(statement, 1)
+            let logoUrl = columnText(statement, 2)
+            let callReason = columnText(statement, 3)
+            let brandId = columnText(statement, 4)
+            let updatedAtInt = sqlite3_column_int64(statement, 5)
+            let date = Date(timeIntervalSince1970: TimeInterval(updatedAtInt))
+            let updatedAtString = dateFormatter.string(from: date)
+            result.append(BrandingInfo(
+                phoneNumberE164: e164,
+                brandName: brandName,
+                logoUrl: logoUrl,
+                callReason: callReason,
+                brandId: brandId,
+                updatedAt: updatedAtString
+            ))
+        }
+        sqlite3_finalize(statement)
+        return result
     }
 
     private func getBrandingImpl(for phoneNumber: String) -> BrandingInfo? {
@@ -320,10 +377,10 @@ class BrandingDatabase {
 
         var success = true
         for branding in brandingList {
-            bindText(statement, 1, branding.phoneNumberE164)
-            bindText(statement, 2, branding.brandName ?? "")
-            bindText(statement, 3, branding.logoUrl)
-            bindText(statement, 4, branding.callReason)
+            bindText(statement, 1, Self.clampRequired(branding.phoneNumberE164, maxLength: BrandingFieldMaxLength.phoneNumberE164))
+            bindText(statement, 2, Self.clampRequired(branding.brandName ?? "", maxLength: BrandingFieldMaxLength.brandName))
+            bindText(statement, 3, Self.clamp(branding.logoUrl, maxLength: BrandingFieldMaxLength.logoUrl))
+            bindText(statement, 4, Self.clamp(branding.callReason, maxLength: BrandingFieldMaxLength.callReason))
             bindText(statement, 5, branding.brandId)
             sqlite3_bind_int64(statement, 6, Int64(Date().timeIntervalSince1970))
 

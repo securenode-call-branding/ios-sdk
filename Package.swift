@@ -7,7 +7,7 @@ let package = Package(
         .iOS(.v13)
     ],
     products: [
-        .library(
+            	.library(
             name: "SecureNodeSDK",
             targets: ["SecureNodeSDK"]
         ),
@@ -23,8 +23,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SecureNodeSDKTests",
-            dependencies: ["SecureNodeSDK"],
-            path: "Tests"
+            dependencies: ["SecureNodeSDK"]
         ),
     ]
 )

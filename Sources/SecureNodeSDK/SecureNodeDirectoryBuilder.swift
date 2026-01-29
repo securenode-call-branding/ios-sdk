@@ -12,8 +12,11 @@ enum SecureNodeDirectoryBuilder {
             let digits = e164.filter(\.isNumber)
             guard let _ = Int64(digits) else { continue }
 
-            let label = (b.brandName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !label.isEmpty else { continue }
+            let name = (b.brandName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+            // Include call_reason so the OS has name/reason for display and to help bypass unknown/spam filtering.
+            let reason = (b.callReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = reason.isEmpty ? name : "\(name) (\(reason))"
 
             entries.append(SecureNodeSnapshotEntry(e164: e164, digits: digits, label: label))
             if entries.count >= maxActiveNumbers { break }
@@ -31,9 +34,15 @@ enum SecureNodeDirectoryBuilder {
     }
 }
 
-struct SecureNodeSnapshotEntry: Codable {
-    let e164: String
-    let digits: String
-    let label: String
+public struct SecureNodeSnapshotEntry: Codable {
+    public let e164: String
+    public let digits: String
+    public let label: String
+
+    public init(e164: String, digits: String, label: String) {
+        self.e164 = e164
+        self.digits = digits
+        self.label = label
+    }
 }
 

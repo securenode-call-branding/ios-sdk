@@ -42,7 +42,7 @@ final class SecureNodeCore {
             deviceType: nil,
             osVersion: "\(ProcessInfo.processInfo.operatingSystemVersionString)",
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
-            sdkVersion: Bundle.module.infoDictionary?["CFBundleShortVersionString"] as? String,
+            sdkVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
             customerName: nil,
             customerAccountNumber: nil
         ) { _ in }
@@ -96,7 +96,7 @@ final class SecureNodeCore {
         let deviceId = deviceIdentity.getOrCreateDeviceId()
         let os = "\(ProcessInfo.processInfo.operatingSystemVersionString)"
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let sdkVersion = Bundle.module.infoDictionary?["CFBundleShortVersionString"] as? String
+        let sdkVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
 
         // contacts_enabled is authoritative (permission gate)
         let contactsEnabled = (CNContactStore.authorizationStatus(for: .contacts) == .authorized)

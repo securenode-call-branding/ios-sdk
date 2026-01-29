@@ -1,0 +1,696 @@
+openapi: 3.1.0
+info:
+  title: SecureNode Mobile API
+  version: "1.0.0"
+  description: |
+    Public API used by SecureNode mobile SDKs (iOS/Android).
+
+    Authentication: send `X-API-Key` on every request.
+servers:
+  - url: https://verify.securenode.io
+    description: Production
+security:
+  - ApiKeyAuth: []
+tags:
+  - name: Branding
+  - name: Devices
+  - name: Debug
+paths:
+  /api/mobile/branding/sync:
+    get:
+      tags: [Branding]
+      summary: Sync branding directory
+      description: |
+        Returns active branding directory entries for the authenticated API key.
+        Supports incremental sync via `since`. Supports per-device debug policy via `device_id`.
+      parameters:
+        - in: query
+          name: since
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: ISO timestamp for incremental sync (returns entries updated after this timestamp).
+        - in: query
+          name: device_id
+          required: false
+          schema:
+            type: string
+          description: Stable device identifier used for per-device policy/telemetry.
+      responses:
+        "200":
+          description: Sync response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrandingSyncResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [Branding]
+      summary: Sync acknowledgment (optional)
+      description: |
+        Legacy/optional acknowledgment endpoint.
+        Currently returns `{ success: true, last_synced_at: <now> }` and does not track per-number state server-side.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrandingSyncAckRequest"
+      responses:
+        "200":
+          description: Ack response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  success:
+                    type: boolean
+                  last_synced_at:
+                    type: string
+                    format: date-time
+                required: [success, last_synced_at]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/branding/lookup:
+    get:
+      tags: [Branding]
+      summary: Lookup branding for a phone number
+      parameters:
+        - in: query
+          name: e164
+          required: true
+          schema:
+            type: string
+          description: Phone number in E.164 format (example: `+14155552671`).
+        - in: query
+          name: device_id
+          required: false
+          schema:
+            type: string
+          description: Stable device identifier used for per-device attribution.
+        - in: query
+          name: format
+          required: false
+          schema:
+            type: string
+            enum: ["public"]
+          description: When set to `public`, returns a DTO-only response without billing/config fields.
+      responses:
+        "200":
+          description: Lookup response
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/BrandingLookupResponse"
+                  - $ref: "#/components/schemas/PublicLookupResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/branding/event:
+    post:
+      tags: [Branding]
+      summary: Record branding outcome event (authoritative usage/telemetry)
+      description: |
+        Devices call this endpoint for call outcomes they can observe.
+        This endpoint is optional telemetry. Billing is derived from successful sync delivery (`GET /api/mobile/branding/sync`).
+
+        Notes:
+        - Clients should set `event_key` for retry safety (idempotency).
+        - Some responses may return HTTP 202 while still acknowledging the event as accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrandingEventRequest"
+      responses:
+        "200":
+          description: Event accepted + processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrandingEventResponse"
+        "202":
+          description: Event accepted but only partially processed (non-blocking)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrandingEventResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/device/register:
+    post:
+      tags: [Devices]
+      summary: Register a device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRegisterRequest"
+      responses:
+        "200":
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  success:
+                    type: boolean
+                  device:
+                    type: object
+                    additionalProperties: true
+                    description: Upserted device row (server-defined fields).
+                required: [success, device]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/device/update:
+    post:
+      tags: [Devices]
+      summary: Update device capabilities/state (idempotent)
+      description: |
+        Authoritative, idempotent device + capability update.
+        Safe to retry. No billing impact. Device must already be registered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceUpdateRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  success:
+                    type: boolean
+                  updated_at:
+                    type: string
+                    format: date-time
+                required: [success, updated_at]
+        "404":
+          description: Device not registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/device/log:
+    post:
+      tags: [Devices]
+      summary: Ingest device logs (deprecated; use /device/update + /debug/upload)
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceLogRequest"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/mobile/debug/upload:
+    post:
+      tags: [Debug]
+      summary: Upload remote debug package (server-gated, one-shot)
+      description: |
+        Upload a debug package for a device.
+        This endpoint is **server gated** per device (enabled/requested/allowed + expires_at).
+        Successful upload auto-clears the device's `debug_request_upload` gate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DebugUploadRequest"
+      responses:
+        "200":
+          description: Uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  success:
+                    type: boolean
+                  id:
+                    type: string
+                    description: Debug upload record id.
+                required: [success, id]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not permitted / expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Duplicate nonce (replay)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  responses:
+    Unauthorized:
+      description: Unauthorized (invalid or missing API key)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    SuccessResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        success:
+          type: boolean
+      required: [success]
+
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        code:
+          type: string
+          nullable: true
+        error:
+          type: string
+      required: [success, error]
+
+    DebugUiPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        request_upload:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        allow_export:
+          type: boolean
+      required: [enabled, request_upload, expires_at, allow_export]
+
+    BrandingSyncItem:
+      type: object
+      additionalProperties: false
+      properties:
+        phone_number_e164:
+          type: string
+        brand_name:
+          type: string
+        logo_url:
+          type: string
+          nullable: true
+        call_reason:
+          type: string
+          nullable: true
+        brand_id:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+      required: [phone_number_e164, brand_name, brand_id, updated_at]
+
+    BrandingSyncResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        success:
+          type: boolean
+        branding:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrandingSyncItem"
+        synced_at:
+          type: string
+          format: date-time
+        config:
+          type: object
+          additionalProperties: true
+          properties:
+            mode:
+              type: string
+              enum: ["testing", "live"]
+            branding_enabled:
+              type: boolean
+            voip_dialer_enabled:
+              type: boolean
+            account_status:
+              type: string
+            client_id:
+              type: string
+            used_this_month:
+              type: integer
+              minimum: 0
+            cap_this_month:
+              type: integer
+              minimum: 0
+              nullable: true
+            included_imprints_monthly:
+              type: integer
+              minimum: 0
+            debug_ui:
+              $ref: "#/components/schemas/DebugUiPolicy"
+          required: [mode, branding_enabled, voip_dialer_enabled, account_status, client_id, debug_ui]
+      required: [success, branding, synced_at, config]
+
+    BrandingSyncAckRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        e164_numbers:
+          type: array
+          items:
+            type: string
+        last_synced_at:
+          type: string
+          format: date-time
+
+    BrandingLookupResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        success:
+          type: boolean
+        e164:
+          type: string
+        brand_name:
+          type: string
+          nullable: true
+        logo_url:
+          type: string
+          nullable: true
+        call_reason:
+          type: string
+          nullable: true
+        brand_id:
+          type: string
+          nullable: true
+        display:
+          type: object
+          additionalProperties: true
+        config:
+          type: object
+          additionalProperties: true
+        limits:
+          type: object
+          additionalProperties: true
+      required: [success, e164]
+
+    PublicLookupResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        matched:
+          type: boolean
+        displayed:
+          type: boolean
+        brand:
+          type: object
+          nullable: true
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+            logo:
+              type: string
+              nullable: true
+          required: [name, logo]
+        call_reason:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum: ["cache", "live", "none"]
+      required: [matched, displayed, brand, call_reason, source]
+
+    BrandingEventRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        phone_number_e164:
+          type: string
+        outcome:
+          type: string
+          description: Outcome label (examples: displayed, no_match, disabled, error, call_seen, call_returned).
+        surface:
+          type: string
+          nullable: true
+        device_id:
+          type: string
+          nullable: true
+        branding_request_id:
+          type: string
+          format: uuid
+          nullable: true
+        displayed_at:
+          type: string
+          format: date-time
+          nullable: true
+        event_key:
+          type: string
+          nullable: true
+          description: Idempotency key (max 200 chars). Same key will not double-insert for the same api_key_id.
+        meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Freeform metadata. SDK sends branded (boolean) and branding_applied (boolean) when outcome is displayed; if branding was displayed, branded is true.
+      required: [phone_number_e164, outcome]
+
+    BrandingEventResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        success:
+          type: boolean
+        accepted:
+          type: boolean
+          nullable: true
+          description: Present on some 202 responses.
+        partial:
+          type: boolean
+          nullable: true
+          description: Present on some 202 responses when only raw storage succeeded.
+        warning_code:
+          type: string
+          nullable: true
+        event_id:
+          type: string
+          nullable: true
+        imprint_id:
+          type: string
+          nullable: true
+        outcome:
+          type: string
+        counted:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        displayed_at:
+          type: string
+          format: date-time
+        config:
+          type: object
+          additionalProperties: true
+        limits:
+          type: object
+          additionalProperties: true
+      required: [success, outcome, counted, displayed_at]
+
+    DeviceRegisterRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        platform:
+          type: string
+          enum: ["android", "ios"]
+        device_type:
+          type: string
+          nullable: true
+        os_version:
+          type: string
+          nullable: true
+        app_version:
+          type: string
+          nullable: true
+        sdk_version:
+          type: string
+          nullable: true
+        customer_name:
+          type: string
+          nullable: true
+        customer_account_number:
+          type: string
+          nullable: true
+      required: [device_id, platform]
+
+    DeviceCapabilities:
+      type: object
+      additionalProperties: true
+      properties:
+        contacts_enabled:
+          type: boolean
+          nullable: true
+        contacts_photos_enabled:
+          type: boolean
+          nullable: true
+        call_directory_enabled:
+          type: boolean
+          nullable: true
+        background_refresh:
+          type: boolean
+          nullable: true
+
+    DeviceUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        platform:
+          type: string
+          enum: ["android", "ios"]
+        app_version:
+          type: string
+          nullable: true
+        sdk_version:
+          type: string
+          nullable: true
+        os_version:
+          type: string
+          nullable: true
+        capabilities:
+          $ref: "#/components/schemas/DeviceCapabilities"
+          nullable: true
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+      required: [device_id, platform]
+
+    DeviceLogRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        level:
+          type: string
+          enum: ["debug", "info", "warn", "error"]
+        message:
+          type: string
+        meta:
+          nullable: true
+          description: Freeform JSON metadata.
+        occurred_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [device_id, level, message]
+
+    DebugUploadRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        nonce:
+          type: string
+          format: uuid
+        state:
+          nullable: true
+          description: Freeform JSON SDK state (best-effort).
+        logs:
+          type: string
+          nullable: true
+          description: Newline-separated log text (max 200k chars).
+      required: [device_id, nonce]
+

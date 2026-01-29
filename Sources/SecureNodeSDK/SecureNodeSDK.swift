@@ -1,6 +1,10 @@
 import Foundation
 import CallKit
+import os.log
 import UIKit
+#if canImport(BackgroundTasks)
+import BackgroundTasks
+#endif
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
@@ -10,8 +14,17 @@ import CryptoKit
  *
  * Provides branding integration for incoming calls via CallKit.
  * Handles local caching, API synchronization, and secure credential storage.
+ * Supports BGAppRefreshTask for background sync after app suspend/restart.
  */
 public class SecureNodeSDK {
+    /// Task identifier for background branding sync. Add this to your app's Info.plist under BGTaskSchedulerPermittedIdentifiers.
+    public static let backgroundRefreshTaskIdentifier = "com.securenode.branding.sync"
+
+    #if canImport(BackgroundTasks)
+    private static weak var _instanceForBackgroundTask: SecureNodeSDK?
+    private static var _backgroundTaskRegistered = false
+    #endif
+
     private let config: SecureNodeConfig
     private let options: SecureNodeOptions
     private let apiClient: ApiClient
@@ -23,8 +36,25 @@ public class SecureNodeSDK {
     private let runtimeConfig = RuntimeConfigStore()
     private let deviceIdentity = DeviceIdentity()
     private var autoSyncTimer: DispatchSourceTimer?
+    private var presenceHeartbeatTimer: DispatchSourceTimer?
     private let staleSeconds: TimeInterval = 24 * 60 * 60
-    
+    private let presenceHeartbeatInterval: TimeInterval = 5 * 60
+
+    private static let log = Logger(subsystem: "SecureNodeSDK", category: "api")
+
+    /// Invoke optional debug logger on main thread (for app debug UI); also logs to os_log for Console.app.
+    private func debugLogLine(_ line: String) {
+        Self.log.info("\(line, privacy: .public)")
+        guard options.debugLog != nil else { return }
+        if Thread.isMainThread {
+            options.debugLog?(line)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.options.debugLog?(line)
+            }
+        }
+    }
+
     /**
      * Initialize the SDK
      */
@@ -41,7 +71,7 @@ public class SecureNodeSDK {
         keychainManager = KeychainManager()
         
         // Retrieve or store API key securely
-        if let storedApiKey = keychainManager.getApiKey() {
+        if keychainManager.getApiKey() != nil {
             // Use stored key
         } else if !config.apiKey.isEmpty {
             keychainManager.saveApiKey(config.apiKey)
@@ -57,43 +87,184 @@ public class SecureNodeSDK {
         self.trustDelegate = delegate.isEnabled ? delegate : nil
         self.session = URLSession(configuration: sessionConfig, delegate: self.trustDelegate, delegateQueue: nil)
         
-        // Initialize API client
-        apiClient = ApiClient(baseURL: config.apiURL, apiKey: apiKey, session: session)
+        // Initialize API client (default base URL to edge.securenode.io if not set)
+        let baseURL: URL = {
+            let u = config.apiURL
+            guard let host = u.host, !host.isEmpty else { return SecureNodeConfig.defaultBaseURL }
+            return u
+        }()
+        apiClient = ApiClient(baseURL: baseURL, apiKey: apiKey, session: session, debugLog: options.debugLog)
 
         // Persist local feature flags
         runtimeConfig.setLocalSecureVoiceEnabled(options.enableSecureVoice)
 
-        // Register device (best-effort; fail-open)
+        // Initialize database (single shared instance for process-wide serialized access)
+        database = BrandingDatabase.shared
+
+        // Initialize image cache
+        imageCache = ImageCache()
+
+        // Register device (best-effort; fail-open) so it appears on the portal.
         let deviceId = deviceIdentity.getOrCreateDeviceId()
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let osVer = ProcessInfo.processInfo.operatingSystemVersion
+        let deviceTypeDisplay = "\(UIDevice.current.model) (\(osVer.majorVersion).\(osVer.minorVersion))"
         apiClient.registerDevice(
             deviceId: deviceId,
             platform: "ios",
-            deviceType: nil,
-            osVersion: "\(ProcessInfo.processInfo.operatingSystemVersionString)",
-            appVersion: nil,
-            sdkVersion: nil,
+            deviceType: deviceTypeDisplay,
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            appVersion: appVersion,
+            sdkVersion: appVersion,
             customerName: options.customerName,
             customerAccountNumber: options.customerAccountNumber
-        ) { _ in
-            // ignore
+        ) { [weak self] result in
+            switch result {
+            case .success: self?.debugLogLine("register: ok")
+            case .failure(let e): self?.debugLogLine("register: err \(e.localizedDescription)")
+            }
+            self?.sendDeviceUpdateNow(lastSeen: ISO8601DateFormatter().string(from: Date()))
         }
-        
-        // Initialize database (single shared instance for process-wide serialized access)
-        database = BrandingDatabase.shared
-        
-        // Initialize image cache
-        imageCache = ImageCache()
-        
+        // Delayed update so portal sees device even if register completion was slow or update was dropped.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.sendDeviceUpdateNow(lastSeen: ISO8601DateFormatter().string(from: Date()))
+        }
+
         // Clean up old branding data periodically
         cleanupOldBranding()
 
         // Auto-sync every 30 minutes (best-effort; runs only while the app process is alive).
         startAutoSyncEvery30Minutes()
 
+        // BGAppRefreshTask: register and schedule so sync runs after suspend/restart when system allows.
+        registerBackgroundRefreshIfAvailable()
+        scheduleBackgroundRefreshIfAvailable()
+
+        // Presence heartbeats: so the API/system knows this device is active.
+        startPresenceHeartbeats()
+
         // Best-effort: flush queued offline events on startup.
         flushPendingEvents()
         flushPendingTelemetry()
     }
+
+    // MARK: - Presence heartbeats
+
+    private func startPresenceHeartbeats() {
+        presenceHeartbeatTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 60, repeating: presenceHeartbeatInterval, leeway: .seconds(30))
+        timer.setEventHandler { [weak self] in
+            self?.sendPresenceHeartbeatNow()
+        }
+        presenceHeartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func sendPresenceHeartbeatNow() {
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        let observedAt = ISO8601DateFormatter().string(from: Date())
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+        let lastSyncedAt = runtimeConfig.getLastSyncedAt()
+        apiClient.sendPresenceHeartbeat(
+            deviceId: deviceId,
+            observedAt: observedAt,
+            platform: "ios",
+            osVersion: osVersion,
+            lastSyncedAt: lastSyncedAt
+        ) { _ in }
+        // Portal "active devices" uses POST /api/mobile/device/update with last_seen (per OpenAPI).
+        sendDeviceUpdateNow(lastSeen: observedAt)
+    }
+
+    /// Reports lookup result to the API: outcome "displayed" when branding matched, "no_match" when not.
+    private func reportLookupOutcome(phoneNumber: String, branding: BrandingInfo) {
+        let matched = (branding.brandName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        recordCallEvent(
+            phoneNumberE164: phoneNumber,
+            outcome: matched ? "displayed" : "no_match",
+            surface: "lookup",
+            brandingApplied: matched,
+            completion: nil
+        )
+    }
+
+    /// Updates device last_seen and optional capabilities so the portal shows the device as active.
+    private func sendDeviceUpdateNow(lastSeen: String? = nil) {
+        let deviceId = deviceIdentity.getOrCreateDeviceId()
+        let now = lastSeen ?? ISO8601DateFormatter().string(from: Date())
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        var capabilities: [String: Any]? = nil
+        #if canImport(BackgroundTasks)
+        if #available(iOS 13.0, *) {
+            capabilities = ["background_refresh": true]
+        }
+        #endif
+        apiClient.updateDevice(
+            deviceId: deviceId,
+            platform: "ios",
+            osVersion: osVersion,
+            appVersion: appVersion,
+            sdkVersion: appVersion,
+            capabilities: capabilities,
+            lastSeen: now
+        ) { [weak self] result in
+            switch result {
+            case .success: self?.debugLogLine("device update: ok")
+            case .failure(let e): self?.debugLogLine("device update: err \(e.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Background refresh (iOS 13+)
+
+    #if canImport(BackgroundTasks)
+    private func registerBackgroundRefreshIfAvailable() {
+        guard #available(iOS 13.0, *) else { return }
+        guard !Self._backgroundTaskRegistered else {
+            Self._instanceForBackgroundTask = self
+            return
+        }
+        Self._backgroundTaskRegistered = true
+        Self._instanceForBackgroundTask = self
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.backgroundRefreshTaskIdentifier,
+            using: nil
+        ) { [weak self] task in
+            (self ?? Self._instanceForBackgroundTask)?.performBackgroundSync(task: task as? BGAppRefreshTask)
+        }
+    }
+
+    private func scheduleBackgroundRefreshIfAvailable() {
+        if #available(iOS 13.0, *) {
+            let request = BGAppRefreshTaskRequest(identifier: Self.backgroundRefreshTaskIdentifier)
+            request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+            do {
+                try BGTaskScheduler.shared.submit(request)
+            } catch {
+                // System may reject (e.g. disabled by user); log and continue.
+                print("SecureNodeSDK: scheduleBackgroundRefresh failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func performBackgroundSync(task: BGAppRefreshTask?) {
+        let since = runtimeConfig.getLastSyncedAt()
+        syncBranding(since: since) { [weak self] result in
+            switch result {
+            case .success:
+                self?.scheduleBackgroundRefreshIfAvailable()
+                task?.setTaskCompleted(success: true)
+            case .failure:
+                task?.setTaskCompleted(success: false)
+            }
+        }
+    }
+    #else
+    private func registerBackgroundRefreshIfAvailable() {}
+    private func scheduleBackgroundRefreshIfAvailable() {}
+    #endif
     
     /**
      * Sync branding data from the API
@@ -117,6 +288,13 @@ public class SecureNodeSDK {
                     self?.database.saveBranding(response.branding)
                 }
 
+                // Persist syncedAt for incremental sync (in-app timer and background task).
+                self?.runtimeConfig.setLastSyncedAt(response.syncedAt)
+
+                // Presence heartbeat and device/update so the portal shows this device as active.
+                self?.sendPresenceHeartbeatNow()
+                self?.sendDeviceUpdateNow(lastSeen: response.syncedAt)
+
                 // Persist config (non-breaking) so call handling can gate assistance when capped/disabled.
                 if let cfg = response.config {
                     self?.runtimeConfig.setBrandingEnabled(cfg.brandingEnabled ?? true)
@@ -124,7 +302,10 @@ public class SecureNodeSDK {
                         self?.runtimeConfig.setServerSecureVoiceEnabled(voip)
                     }
                 }
-                
+
+                // Schedule next background refresh when running in foreground.
+                self?.scheduleBackgroundRefreshIfAvailable()
+
                 // Pre-cache images in background
                 response.branding.forEach { branding in
                     if let logoUrl = branding.logoUrl {
@@ -147,7 +328,26 @@ public class SecureNodeSDK {
                         "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1000)
                     ]
                 )
-                
+
+                // POST sync ack so server knows sync was applied (OpenAPI: last_synced_at, optional e164_numbers).
+                let e164s = response.branding.map(\.phoneNumberE164)
+                self?.apiClient.syncAck(lastSyncedAt: response.syncedAt, e164Numbers: e164s.isEmpty ? nil : e164s) { [weak self] result in
+                    switch result {
+                    case .success: self?.debugLogLine("sync ack: ok")
+                    case .failure(let e): self?.debugLogLine("sync ack: err \(e.localizedDescription)")
+                    }
+                }
+
+                // POST debug/upload only when sync config.debug_ui allows (request_upload + allow_export).
+                if let debugUi = response.config?.debugUi, debugUi.requestUpload == true, debugUi.allowExport == true {
+                    self?.apiClient.uploadDebug(deviceId: deviceId, nonce: UUID().uuidString) { _ in }
+                }
+
+                // Call Directory: write snapshot and reload so dialer/missed-call show branding (when app group + extension configured).
+                self?.writeCallDirectorySnapshotAndReloadIfConfigured(branding: response.branding, sinceCursor: response.syncedAt)
+                // Contacts: grouped by branding profile, incremental; one contact per brand with up to N numbers.
+                self?.syncManagedContactsIfConfigured(branding: response.branding)
+
                 completion(.success(response))
             case .failure(let error):
                 self?.trackTelemetry(
@@ -166,6 +366,54 @@ public class SecureNodeSDK {
         }
     }
 
+    /// When appGroupId is set, syncs Contacts grouped by branding profile (one contact per brand, up to N numbers per contact); incremental via registry.
+    private func syncManagedContactsIfConfigured(branding: [BrandingInfo]) {
+        guard let group = config.appGroupId, !group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let maxProfiles = config.maxManagedContactProfiles
+        let maxNumbers = config.maxPhoneNumbersPerContact
+        Task {
+            do {
+                let sync = ManagedContactsSync(appGroupId: group)
+                let result = try await sync.syncManagedContacts(branding: branding, maxProfiles: maxProfiles, maxPhoneNumbersPerContact: maxNumbers)
+                await MainActor.run { [weak self] in
+                    self?.debugLogLine("contacts sync: ok upserted \(result.upserted) deleted \(result.deleted) photos \(result.photosApplied)")
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.debugLogLine("contacts sync: err \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// When appGroupId + callDirectoryExtensionBundleId are set, writes snapshot to App Group and reloads Call Directory so dialer/missed-call show branding and OS bypasses unknown/spam filtering.
+    private func writeCallDirectorySnapshotAndReloadIfConfigured(branding: [BrandingInfo], sinceCursor: String?) {
+        guard let group = config.appGroupId, let extId = config.callDirectoryExtensionBundleId,
+              !group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !extId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let maxActive = 5000
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            do {
+                let store = SecureNodeAppGroupStore(appGroupId: group)
+                let entries = SecureNodeDirectoryBuilder.buildSnapshotEntries(from: branding, maxActiveNumbers: maxActive)
+                _ = try store.writeSnapshot(entries: entries, sinceCursor: sinceCursor)
+                DispatchQueue.main.async {
+                    CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
+                        if let err = err {
+                            self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
+                        } else {
+                            self?.debugLogLine("call directory reload: ok \(entries.count) entries")
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.debugLogLine("call directory snapshot: err \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     private func startAutoSyncEvery30Minutes() {
         autoSyncTimer?.cancel()
 
@@ -173,7 +421,8 @@ public class SecureNodeSDK {
         // Start a few seconds after init, then every 30 minutes.
         timer.schedule(deadline: .now() + 5, repeating: 30 * 60, leeway: .seconds(30))
         timer.setEventHandler { [weak self] in
-            self?.syncBranding(since: nil) { _ in
+            let since = self?.runtimeConfig.getLastSyncedAt()
+            self?.syncBranding(since: since) { _ in
                 // ignore
             }
         }
@@ -181,6 +430,13 @@ public class SecureNodeSDK {
         timer.resume()
     }
     
+    /**
+     * List all synced branding entries (from local cache). For demo/debug UI.
+     */
+    public func listSyncedBranding(limit: Int = 500) -> [BrandingInfo] {
+        database.listAllBranding(limit: limit)
+    }
+
     /**
      * Get branding for a specific phone number
      *
@@ -214,6 +470,7 @@ public class SecureNodeSDK {
                     "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1000)
                 ]
             )
+            reportLookupOutcome(phoneNumber: phoneNumber, branding: cached)
             completion(.success(cached))
             return
         }
@@ -242,6 +499,7 @@ public class SecureNodeSDK {
                             "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1000)
                         ]
                     )
+                    self?.reportLookupOutcome(phoneNumber: phoneNumber, branding: branding)
                     completion(.success(branding))
                 } else {
                     self?.trackTelemetry(
@@ -253,14 +511,16 @@ public class SecureNodeSDK {
                             "latency_ms": Int(Date().timeIntervalSince(startedAt) * 1000)
                         ]
                     )
-                    completion(.success(BrandingInfo(
+                    let noMatch = BrandingInfo(
                         phoneNumberE164: phoneNumber,
                         brandName: nil,
                         logoUrl: nil,
                         callReason: nil,
                         brandId: nil,
                         updatedAt: ""
-                    )))
+                    )
+                    self?.reportLookupOutcome(phoneNumber: phoneNumber, branding: noMatch)
+                    completion(.success(noMatch))
                 }
             case .failure(let error):
                 self?.trackTelemetry(
@@ -412,6 +672,7 @@ public class SecureNodeSDK {
         }
         if let brandingApplied = brandingApplied {
             extras["branding_applied"] = brandingApplied
+            extras["branded"] = brandingApplied  // If branding is displayed, we say it was branded.
         }
         if let value = brandingProfileId?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
             extras["branding_profile_id"] = value
@@ -454,13 +715,13 @@ public class SecureNodeSDK {
         ) { [weak self] result in
             switch result {
             case .success(let resp):
-                // Keep local gate in sync with server caps if returned.
+                self?.debugLogLine("event: \(outcome) ok")
                 if let enabled = resp.config?.brandingEnabled {
                     self?.runtimeConfig.setBrandingEnabled(enabled)
                 }
                 completion?(.success(resp))
             case .failure(let err):
-                // Queue offline and return error to caller (best-effort).
+                self?.debugLogLine("event: err \(err.localizedDescription)")
                 let iso = observedAt
                 self?.database.insertPendingEvent(
                     phoneNumberE164: phoneNumberE164,
@@ -474,6 +735,74 @@ public class SecureNodeSDK {
                 completion?(.failure(err))
             }
         }
+
+    }
+
+    /**
+     * Baseline "seen" event when identity is displayed. Returns event_id (call_id) in response.
+     * Use call_outcome values your exports expect (e.g. ANSWERED, MISSED, REJECTED).
+     */
+    public func recordCallSeen(
+        phoneNumberE164: String,
+        brandingDisplayed: Bool = true,
+        callOutcome: String? = nil,
+        ringDurationSeconds: Int? = nil,
+        callDurationSeconds: Int? = nil,
+        callerNumberE164: String? = nil,
+        destinationNumberE164: String? = nil,
+        completion: ((Result<BrandingEventResponse, Error>) -> Void)? = nil
+    ) {
+        recordCallEvent(
+            phoneNumberE164: phoneNumberE164,
+            outcome: brandingDisplayed ? "displayed" : "no_match",
+            surface: "display",
+            callerNumberE164: callerNumberE164 ?? phoneNumberE164,
+            destinationNumberE164: destinationNumberE164,
+            brandingApplied: brandingDisplayed,
+            ringDurationSeconds: ringDurationSeconds,
+            callDurationSeconds: callDurationSeconds,
+            callOutcome: callOutcome,
+            completion: completion
+        )
+    }
+
+    /**
+     * Missed-call outcome. Report via /mobile/branding/event.
+     */
+    public func recordMissedCall(
+        phoneNumberE164: String,
+        callerNumberE164: String? = nil,
+        destinationNumberE164: String? = nil,
+        completion: ((Result<BrandingEventResponse, Error>) -> Void)? = nil
+    ) {
+        recordCallEvent(
+            phoneNumberE164: phoneNumberE164,
+            outcome: "missed",
+            surface: "display",
+            callerNumberE164: callerNumberE164 ?? phoneNumberE164,
+            destinationNumberE164: destinationNumberE164,
+            completion: completion
+        )
+    }
+
+    /**
+     * Follow-up attribution when the user returns the call. Pass the earlier call_id from recordCallSeen/recordMissedCall.
+     */
+    public func recordCallReturned(
+        phoneNumberE164: String,
+        callId: String,
+        returnCallLatencySeconds: Int? = nil,
+        completion: ((Result<BrandingEventResponse, Error>) -> Void)? = nil
+    ) {
+        recordCallEvent(
+            phoneNumberE164: phoneNumberE164,
+            outcome: "returned",
+            surface: "display",
+            callEventId: callId,
+            returnCallDetected: true,
+            returnCallLatencySeconds: returnCallLatencySeconds,
+            completion: completion
+        )
     }
 
     private func flushPendingEvents(limit: Int = 50) {
@@ -615,6 +944,13 @@ public class SecureNodeSDK {
     }
     
     /**
+     * Remove all cached branding images. Use to free space or reset cache per spec.
+     */
+    public func clearImageCache() {
+        imageCache.clearCache()
+    }
+
+    /**
      * Clean up old branding data (older than retention period)
      */
     private func cleanupOldBranding() {
@@ -707,14 +1043,29 @@ final class SecureNodeTrustDelegate: NSObject, URLSessionDelegate {
  * SDK Configuration
  */
 public struct SecureNodeConfig {
+    /// Default base URL when apiURL is not set or invalid (authoritative: mobile-sdk-endpoints.md).
+    public static let defaultBaseURL: URL = URL(string: "https://api.securenode.io")!
+
     public let apiURL: URL
     public let apiKey: String
     public let campaignId: String?
-    
-    public init(apiURL: URL, apiKey: String = "", campaignId: String? = nil) {
+    /// App Group ID for Call Directory snapshot (dialer/missed-call branding). Set with callDirectoryExtensionBundleId to enable.
+    public let appGroupId: String?
+    /// Call Directory extension bundle ID (e.g. com.yourapp.SecureNode.CallDirectory). Required for dialer branding.
+    public let callDirectoryExtensionBundleId: String?
+    /// Max managed contacts (grouped by branding profile). One contact per brand, up to maxPhoneNumbersPerContact numbers per contact. Default 1500.
+    public let maxManagedContactProfiles: Int
+    /// Max phone numbers per managed contact (same branding profile). Default 50.
+    public let maxPhoneNumbersPerContact: Int
+
+    public init(apiURL: URL, apiKey: String = "", campaignId: String? = nil, appGroupId: String? = nil, callDirectoryExtensionBundleId: String? = nil, maxManagedContactProfiles: Int = 1500, maxPhoneNumbersPerContact: Int = 50) {
         self.apiURL = apiURL
         self.apiKey = apiKey
         self.campaignId = campaignId
+        self.appGroupId = appGroupId
+        self.callDirectoryExtensionBundleId = callDirectoryExtensionBundleId
+        self.maxManagedContactProfiles = max(1, min(maxManagedContactProfiles, 5000))
+        self.maxPhoneNumbersPerContact = max(1, min(maxPhoneNumbersPerContact, 100))
     }
 }
 
@@ -726,6 +1077,7 @@ final class RuntimeConfigStore {
     private let keyBrandingEnabled = "securenode_branding_enabled"
     private let keyServerSecureVoiceEnabled = "securenode_server_secure_voice_enabled"
     private let keyLocalSecureVoiceEnabled = "securenode_local_secure_voice_enabled"
+    private let keyLastSyncedAt = "securenode_branding_last_synced_at"
 
     func isBrandingEnabled() -> Bool {
         // Default allow until server tells us otherwise.
@@ -753,6 +1105,14 @@ final class RuntimeConfigStore {
 
     func setLocalSecureVoiceEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: keyLocalSecureVoiceEnabled)
+    }
+
+    func getLastSyncedAt() -> String? {
+        defaults.string(forKey: keyLastSyncedAt)
+    }
+
+    func setLastSyncedAt(_ iso: String) {
+        defaults.set(iso, forKey: keyLastSyncedAt)
     }
 }
 

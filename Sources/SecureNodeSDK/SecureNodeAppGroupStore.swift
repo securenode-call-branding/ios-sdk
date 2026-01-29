@@ -175,37 +175,40 @@ enum ZlibGzipLike {
     }
 
     private static func perform(data: Data, operation: compression_stream_operation) throws -> Data {
-        var stream = compression_stream()
-        var status = compression_stream_init(&stream, operation, COMPRESSION_ZLIB)
-        guard status != COMPRESSION_STATUS_ERROR else { throw SecureNodeError.snapshotWriteFailed }
-        defer { compression_stream_destroy(&stream) }
-
-        let dstBufferSize = 64 * 1024
-        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: dstBufferSize)
-        defer { dstBuffer.deallocate() }
-
-        var output = Data()
-
-        return try data.withUnsafeBytes { (srcRaw: UnsafeRawBufferPointer) -> Data in
-            guard let srcBase = srcRaw.bindMemory(to: UInt8.self).baseAddress else { return Data() }
-            stream.src_ptr = srcBase
-            stream.src_size = data.count
-
-            while true {
-                stream.dst_ptr = dstBuffer
-                stream.dst_size = dstBufferSize
-
-                status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
-                switch status {
-                case COMPRESSION_STATUS_OK, COMPRESSION_STATUS_END:
-                    let produced = dstBufferSize - stream.dst_size
-                    if produced > 0 { output.append(dstBuffer, count: produced) }
-                    if status == COMPRESSION_STATUS_END { return output }
-                default:
-                    throw SecureNodeError.snapshotWriteFailed
-                }
-            }
+        if operation == COMPRESSION_STREAM_DECODE {
+            return try decompressBuffer(data)
         }
+        return try compressBuffer(data)
+    }
+
+    private static func decompressBuffer(_ data: Data) throws -> Data {
+        let scratchSize = compression_decode_scratch_buffer_size(COMPRESSION_ZLIB)
+        let scratch = scratchSize > 0 ? UnsafeMutablePointer<UInt8>.allocate(capacity: scratchSize) : nil
+        defer { scratch?.deallocate() }
+        let dstCapacity = max(64 * 1024, data.count * 8)
+        let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
+        defer { dst.deallocate() }
+        let written = data.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Int in
+            guard let srcBase = src.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+            return compression_decode_buffer(dst, dstCapacity, srcBase, data.count, scratch, COMPRESSION_ZLIB)
+        }
+        guard written > 0 else { throw SecureNodeError.snapshotWriteFailed }
+        return Data(bytes: dst, count: written)
+    }
+
+    private static func compressBuffer(_ data: Data) throws -> Data {
+        let scratchSize = compression_encode_scratch_buffer_size(COMPRESSION_ZLIB)
+        let scratch = scratchSize > 0 ? UnsafeMutablePointer<UInt8>.allocate(capacity: scratchSize) : nil
+        defer { scratch?.deallocate() }
+        let dstCapacity = max(64 * 1024, data.count + 64)
+        let dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCapacity)
+        defer { dst.deallocate() }
+        let written = data.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Int in
+            guard let srcBase = src.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+            return compression_encode_buffer(dst, dstCapacity, srcBase, data.count, scratch, COMPRESSION_ZLIB)
+        }
+        guard written > 0 else { throw SecureNodeError.snapshotWriteFailed }
+        return Data(bytes: dst, count: written)
     }
 }
 

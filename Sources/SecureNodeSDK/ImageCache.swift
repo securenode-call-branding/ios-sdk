@@ -2,14 +2,18 @@ import Foundation
 import UIKit
 
 /**
- * Image cache manager for branding logos
+ * Image cache manager for branding logos.
  *
- * Stores images in app's cache directory for fast retrieval.
+ * Storage: Library/Caches/SecureNodeBranding/
+ * Format: PNG (or response format from URL); files use .png extension.
+ * Naming: Base64-encoded URL (sanitized: / → _, + → -, = stripped) + ".png".
+ * Strategy: Check local cache first; if miss, download and save for subsequent lookups.
  */
 class ImageCache {
+    /// Library/Caches/SecureNodeBranding/ per spec.
     private let cacheDirectory: URL
     private let session: URLSession
-    
+
     init() {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheDirectory = cacheDir.appendingPathComponent("SecureNodeBranding", isDirectory: true)
@@ -72,6 +76,15 @@ class ImageCache {
         }.resume()
     }
     
+    /**
+     * Remove all cached images. Use if the app needs to free space or reset cache.
+     */
+    func clearCache() {
+        try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil).forEach { url in
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     /**
      * Clean up old images (older than 30 days)
      */
