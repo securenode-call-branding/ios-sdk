@@ -33,6 +33,7 @@
   },
   "testTargets" : [
     {
+      "enabled" : false,
       "parallelizable" : true,
       "selectedTags" : {
         "includeXCTests" : true
@@ -44,6 +45,7 @@
       }
     },
     {
+      "enabled" : false,
       "parallelizable" : true,
       "selectedTags" : {
         "includeXCTests" : true

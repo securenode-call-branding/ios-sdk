@@ -9,21 +9,26 @@ private enum DemoConfig {
     static let apiURLString = "https://api.securenode.io"
 }
 
+private let hasSeenTrustEngineNoticeKey = "SecureNode.hasSeenTrustEngineNotice"
+
 @main
 struct SecureNodeApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(hasSeenTrustEngineNoticeKey) private var hasSeenTrustEngineNotice = false
     @State private var showIntroVideo = true
 
     var body: some Scene {
         WindowGroup {
-            if showIntroVideo {
+            if !hasSeenTrustEngineNotice {
+                TrustEngineNoticeView(onContinue: { hasSeenTrustEngineNotice = true })
+            } else if showIntroVideo {
                 IntroVideoView(onFinish: { showIntroVideo = false })
             } else {
                 ContentView()
                     .environmentObject(DemoSdkHolder.shared)
             }
         }
-        . onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 DemoSdkHolder.shared.triggerSync()
             }
