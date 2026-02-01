@@ -1,4 +1,5 @@
 import SwiftUI
+import CallKit
 
 struct ContentView: View {
     @EnvironmentObject var demo: DemoSdkHolder
@@ -6,6 +7,7 @@ struct ContentView: View {
     @State private var isLookingUp = false
     @State private var lookupNumber = ""
     @State private var lookupResult: String = ""
+    @State private var selectedContact: BrandingInfo?
 
     var body: some View {
         Group {
@@ -35,6 +37,9 @@ struct ContentView: View {
                     }
                 )
             contentList
+            if selectedContact != nil {
+                contactDetailOverlay
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("SecureNode")
@@ -78,8 +83,10 @@ struct ContentView: View {
                     .padding(6)
                 }
                 .onChange(of: demo.apiDebugLines.count) { _ in
-                    if let last = demo.apiDebugLines.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
+                    DispatchQueue.main.async {
+                        if let last = demo.apiDebugLines.indices.last {
+                            proxy.scrollTo(last, anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -92,13 +99,62 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    private var contactDetailOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { selectedContact = nil }
+            if let contact = selectedContact {
+                VStack(spacing: 12) {
+                    if let urlString = contact.logoUrl, let url = URL(string: urlString) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFit()
+                            case .failure:
+                                Image(systemName: "person.circle.fill")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.secondary)
+                            default:
+                                ProgressView()
+                            }
+                        }
+                        .frame(width: 64, height: 64)
+                        .clipShape(Circle())
+                    } else {
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 64))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(contact.brandName ?? "—")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(contact.phoneNumberE164)
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    if let reason = contact.callReason, !reason.isEmpty {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: 280)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .onTapGesture { selectedContact = nil }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var listContent: some View {
         Section {
                 Button {
                     syncBranding()
                 } label: {
                     HStack {
-                        Text("Sync branding")
+                        Text("Sync now")
                         Spacer()
                         if isSyncing {
                             ProgressView()
@@ -110,8 +166,24 @@ struct ContentView: View {
                 Text(demo.lastSyncMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text("Syncs automatically when app opens or returns to foreground.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             } header: {
                 Text("SDK demo")
+            }
+            .listRowBackground(Color.black.opacity(0.25))
+
+            Section {
+                Button("Open Call Blocking & Identification") {
+                    CXCallDirectoryManager.sharedInstance.openSettings { _ in }
+                }
+                .buttonStyle(.plain)
+                Text("Turn on \"SecureNode Call Directory\" so incoming calls show branding.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Call Identification")
             }
             .listRowBackground(Color.black.opacity(0.25))
 
@@ -122,14 +194,19 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(demo.syncedBranding.enumerated()), id: \.offset) { _, item in
-                        HStack {
-                            Text(item.phoneNumberE164)
-                                .font(.system(.caption, design: .monospaced))
-                            Spacer()
-                            Text(item.brandName ?? "—")
-                                .font(.caption)
-                                .lineLimit(1)
+                        Button {
+                            selectedContact = item
+                        } label: {
+                            HStack {
+                                Text(item.phoneNumberE164)
+                                    .font(.system(.caption, design: .monospaced))
+                                Spacer()
+                                Text(item.brandName ?? "—")
+                                    .font(.caption)
+                                    .lineLimit(1)
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             } header: {
@@ -161,28 +238,11 @@ struct ContentView: View {
     private func triggerInitialSync() {
         demo.addApiDebug("app appeared")
         demo.loadSyncedBranding()
-        syncBranding()
     }
 
     private func syncBranding() {
         isSyncing = true
-        demo.lastSyncMessage = "Syncing…"
-        demo.addApiDebug("sync: start")
-        demo.sdk.syncBranding(since: nil) { result in
-            Task { @MainActor in
-                isSyncing = false
-                switch result {
-                case .success(let response):
-                    demo.lastSyncCount = response.branding.count
-                    demo.lastSyncMessage = "Synced \(response.branding.count) items"
-                    demo.addApiDebug("sync: ok \(response.branding.count) items")
-                    demo.loadSyncedBranding()
-                case .failure(let error):
-                    demo.lastSyncMessage = "Error: \(error.localizedDescription)"
-                    demo.addApiDebug("sync: err \(error.localizedDescription)")
-                }
-            }
-        }
+        demo.triggerSync { isSyncing = false }
     }
 
     private func lookupBranding() {

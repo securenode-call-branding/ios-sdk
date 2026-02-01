@@ -63,7 +63,12 @@ class ApiClient {
 
         session.dataTask(with: request) { [weak self] data, response, error in
             if let error = error {
-                self?.log("\(method) \(path) -> err \(error.localizedDescription)")
+                let isCancelled = (error as? URLError)?.code == .cancelled
+                if isCancelled {
+                    self?.log("\(method) \(path) -> skipped (cancelled)")
+                } else {
+                    self?.log("\(method) \(path) -> err \(error.localizedDescription)")
+                }
                 if let self = self, urls.count > 1 {
                     self.runFirstOK(urls: Array(urls.dropFirst()), build: build, decode: decode, completion: completion)
                     return

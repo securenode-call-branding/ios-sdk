@@ -7,10 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7C7DA6EF2F2C3CED00227B4A /* Info 2.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7C7DA6EE2F2C3CED00227B4A /* Info 2.plist */; };
+		7C7DA79F2F2C405D00227B4A /* Info 3.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7C7DA79E2F2C405D00227B4A /* Info 3.plist */; };
+		7C7DA7A12F2C409D00227B4A /* Info 4.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7C7DA7A02F2C409D00227B4A /* Info 4.plist */; };
+		7C7DA7A32F2C40CF00227B4A /* Info 5.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7C7DA7A22F2C40CF00227B4A /* Info 5.plist */; };
 		7CBD29BA2F2AA7E20035BD31 /* CallKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CBD29B92F2AA7E20035BD31 /* CallKit.framework */; };
 		7CBD29BD2F2AF6E90035BD31 /* SecureNodeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CBD29BC2F2AF6E90035BD31 /* SecureNodeModels.swift */; };
 		7CBD29C02F2B0A000035BD31 /* CallKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CBD29B92F2AA7E20035BD31 /* CallKit.framework */; };
 		7CBD29C12F2B0B000035BD31 /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CBD29C22F2B0B000035BD31 /* BackgroundTasks.framework */; };
+		7CCD2E012F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7CCD2E022F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		7CCD2E072F2A943D0051CBEB /* CallKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CBD29B92F2AA7E20035BD31 /* CallKit.framework */; };
+		7CCD2E102F2A943D0051CBEB /* SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CCD2E0F2F2A943D0051CBEB /* SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,15 +35,43 @@
 			remoteGlobalIDString = 7CAED28A2F2A943D0051CBEB;
 			remoteInfo = SecureNode;
 		};
+		7CCD2E032F2A943D0051CBEB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7CAED2832F2A943D0051CBEB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7CCD2E042F2A943D0051CBEB;
+			remoteInfo = SecureNodeCallDirectoryExtension;
+		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		7CCD2E0B2F2A943D0051CBEB /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				7CCD2E012F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		7C7DA6EE2F2C3CED00227B4A /* Info 2.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 2.plist"; sourceTree = "<group>"; };
+		7C7DA79E2F2C405D00227B4A /* Info 3.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 3.plist"; sourceTree = "<group>"; };
+		7C7DA7A02F2C409D00227B4A /* Info 4.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 4.plist"; sourceTree = "<group>"; };
+		7C7DA7A22F2C40CF00227B4A /* Info 5.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 5.plist"; sourceTree = "<group>"; };
 		7CAED28B2F2A943D0051CBEB /* SecureNode.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SecureNode.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CAED29A2F2A94400051CBEB /* SecureNodeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SecureNodeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CAED2A42F2A94400051CBEB /* SecureNodeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SecureNodeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7CBD29B92F2AA7E20035BD31 /* CallKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CallKit.framework; path = System/Library/Frameworks/CallKit.framework; sourceTree = SDKROOT; };
 		7CBD29BC2F2AF6E90035BD31 /* SecureNodeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureNodeModels.swift; sourceTree = "<group>"; };
 		7CBD29C22F2B0B000035BD31 /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		7CCD2E022F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SecureNodeCallDirectoryExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		7CCD2E0F2F2A943D0051CBEB /* SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift; sourceTree = "<group>"; };
+		7CFE4DF52F2C219E007CDAD7 /* SecureNode.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = SecureNode.xctestplan; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -87,12 +122,29 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7CCD2E062F2A943D0051CBEB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CCD2E072F2A943D0051CBEB /* CallKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		7C7DA51B2F2C2EAA00227B4A /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				7CCD2E0F2F2A943D0051CBEB /* SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		7CAED2822F2A943D0051CBEB = {
 			isa = PBXGroup;
 			children = (
+				7CFE4DF52F2C219E007CDAD7 /* SecureNode.xctestplan */,
 				7CAED28D2F2A943D0051CBEB /* SecureNode */,
 				7CBD29BF2F2B09F00035BD31 /* Sources/SecureNodeSDK */,
 				7CAED29D2F2A94400051CBEB /* SecureNodeTests */,
@@ -100,6 +152,11 @@
 				7CBD29B02F2AA18D0035BD31 /* Frameworks */,
 				7CAED28C2F2A943D0051CBEB /* Products */,
 				7CBD29BC2F2AF6E90035BD31 /* SecureNodeModels.swift */,
+				7C7DA51B2F2C2EAA00227B4A /* Recovered References */,
+				7C7DA6EE2F2C3CED00227B4A /* Info 2.plist */,
+				7C7DA79E2F2C405D00227B4A /* Info 3.plist */,
+				7C7DA7A02F2C409D00227B4A /* Info 4.plist */,
+				7C7DA7A22F2C40CF00227B4A /* Info 5.plist */,
 			);
 			sourceTree = "<group>";
 		};
@@ -107,6 +164,7 @@
 			isa = PBXGroup;
 			children = (
 				7CAED28B2F2A943D0051CBEB /* SecureNode.app */,
+				7CCD2E022F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex */,
 				7CAED29A2F2A94400051CBEB /* SecureNodeTests.xctest */,
 				7CAED2A42F2A94400051CBEB /* SecureNodeUITests.xctest */,
 			);
@@ -132,10 +190,12 @@
 				7CAED2872F2A943D0051CBEB /* Sources */,
 				7CAED2882F2A943D0051CBEB /* Frameworks */,
 				7CAED2892F2A943D0051CBEB /* Resources */,
+				7CCD2E0B2F2A943D0051CBEB /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7CCD2E0C2F2A943D0051CBEB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				7CAED28D2F2A943D0051CBEB /* SecureNode */,
@@ -194,6 +254,28 @@
 			productReference = 7CAED2A42F2A94400051CBEB /* SecureNodeUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		7CCD2E042F2A943D0051CBEB /* SecureNodeCallDirectoryExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7CCD2E082F2A943D0051CBEB /* Build configuration list for PBXNativeTarget "SecureNodeCallDirectoryExtension" */;
+			buildPhases = (
+				7CCD2E092F2A943D0051CBEB /* Sources */,
+				7CCD2E062F2A943D0051CBEB /* Frameworks */,
+				7CCD2E0A2F2A943D0051CBEB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7CBD29BF2F2B09F00035BD31 /* Sources/SecureNodeSDK */,
+			);
+			name = SecureNodeCallDirectoryExtension;
+			packageProductDependencies = (
+			);
+			productName = SecureNodeCallDirectoryExtension;
+			productReference = 7CCD2E022F2A943D0051CBEB /* SecureNodeCallDirectoryExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -218,6 +300,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 7CAED28A2F2A943D0051CBEB;
 					};
+					7CCD2E042F2A943D0051CBEB = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 7CAED2862F2A943D0051CBEB /* Build configuration list for PBXProject "SecureNode" */;
@@ -235,6 +320,7 @@
 			projectRoot = "";
 			targets = (
 				7CAED28A2F2A943D0051CBEB /* SecureNode */,
+				7CCD2E042F2A943D0051CBEB /* SecureNodeCallDirectoryExtension */,
 				7CAED2992F2A94400051CBEB /* SecureNodeTests */,
 				7CAED2A32F2A94400051CBEB /* SecureNodeUITests */,
 			);
@@ -246,6 +332,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7C7DA79F2F2C405D00227B4A /* Info 3.plist in Resources */,
+				7C7DA7A12F2C409D00227B4A /* Info 4.plist in Resources */,
+				7C7DA7A32F2C40CF00227B4A /* Info 5.plist in Resources */,
+				7C7DA6EF2F2C3CED00227B4A /* Info 2.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -257,6 +347,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		7CAED2A22F2A94400051CBEB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7CCD2E0A2F2A943D0051CBEB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -288,6 +385,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7CCD2E092F2A943D0051CBEB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CCD2E102F2A943D0051CBEB /* SecureNodeCallDirectoryExtension/CallDirectoryHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -300,6 +405,11 @@
 			isa = PBXTargetDependency;
 			target = 7CAED28A2F2A943D0051CBEB /* SecureNode */;
 			targetProxy = 7CAED2A52F2A94400051CBEB /* PBXContainerItemProxy */;
+		};
+		7CCD2E0C2F2A943D0051CBEB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7CCD2E042F2A943D0051CBEB /* SecureNodeCallDirectoryExtension */;
+			targetProxy = 7CCD2E032F2A943D0051CBEB /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -428,6 +538,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SecureNode/SecureNode.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
@@ -458,6 +569,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SecureNode/SecureNode.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
@@ -574,6 +686,62 @@
 			};
 			name = Release;
 		};
+		7CCD2E0D2F2A943D0051CBEB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SecureNodeCallDirectoryExtension/SecureNodeCallDirectoryExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SQQKYXFVXG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SecureNodeCallDirectoryExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleName = "SecureNode Call Directory";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SecureNodeKit.SecureNode.CallDirectory;
+				PRODUCT_MODULE_NAME = SecureNodeCallDirectoryExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SECURENODE_APP_EXTENSION";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7CCD2E0E2F2A943D0051CBEB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SecureNodeCallDirectoryExtension/SecureNodeCallDirectoryExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = SQQKYXFVXG;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SecureNodeCallDirectoryExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleName = "SecureNode Call Directory";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SecureNodeKit.SecureNode.CallDirectory;
+				PRODUCT_MODULE_NAME = SecureNodeCallDirectoryExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = SECURENODE_APP_EXTENSION;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -609,6 +777,15 @@
 			buildConfigurations = (
 				7CAED2B52F2A94400051CBEB /* Debug */,
 				7CAED2B62F2A94400051CBEB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7CCD2E082F2A943D0051CBEB /* Build configuration list for PBXNativeTarget "SecureNodeCallDirectoryExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7CCD2E0D2F2A943D0051CBEB /* Debug */,
+				7CCD2E0E2F2A943D0051CBEB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -9,6 +9,32 @@ import BackgroundTasks
 import CryptoKit
 #endif
 
+// MARK: - Logging compatibility shim (iOS 13 support)
+fileprivate struct SNLogger {
+    #if canImport(os)
+    private let oslog: OSLog
+    #endif
+    init(subsystem: String, category: String) {
+        #if canImport(os)
+        self.oslog = OSLog(subsystem: subsystem, category: category)
+        #endif
+    }
+    func info(_ message: String) {
+        if #available(iOS 14.0, *) {
+            // Use new Logger API when available
+            let logger = os.Logger(subsystem: "SecureNodeSDK", category: "api")
+            logger.info("\(message, privacy: .public)")
+        } else {
+            // Fallback for iOS 13
+            #if canImport(os)
+            os_log("%{public}@", log: oslog, type: .info, message)
+            #else
+            print(message)
+            #endif
+        }
+    }
+}
+
 /**
  * SecureNode iOS SDK
  *
@@ -40,11 +66,11 @@ public class SecureNodeSDK {
     private let staleSeconds: TimeInterval = 24 * 60 * 60
     private let presenceHeartbeatInterval: TimeInterval = 5 * 60
 
-    private static let log = Logger(subsystem: "SecureNodeSDK", category: "api")
+    private static let log = SNLogger(subsystem: "SecureNodeSDK", category: "api")
 
     /// Invoke optional debug logger on main thread (for app debug UI); also logs to os_log for Console.app.
     private func debugLogLine(_ line: String) {
-        Self.log.info("\(line, privacy: .public)")
+        Self.log.info(line)
         guard options.debugLog != nil else { return }
         if Thread.isMainThread {
             options.debugLog?(line)
@@ -217,9 +243,8 @@ public class SecureNodeSDK {
         }
     }
 
-    // MARK: - Background refresh (iOS 13+)
-
-    #if canImport(BackgroundTasks)
+    // MARK: - Background refresh (iOS 13+). Excluded in app extensions (BGTaskScheduler unavailable).
+    #if canImport(BackgroundTasks) && !SECURENODE_APP_EXTENSION
     private func registerBackgroundRefreshIfAvailable() {
         guard #available(iOS 13.0, *) else { return }
         guard !Self._backgroundTaskRegistered else {
@@ -243,7 +268,6 @@ public class SecureNodeSDK {
             do {
                 try BGTaskScheduler.shared.submit(request)
             } catch {
-                // System may reject (e.g. disabled by user); log and continue.
                 print("SecureNodeSDK: scheduleBackgroundRefresh failed: \(error.localizedDescription)")
             }
         }
@@ -275,6 +299,15 @@ public class SecureNodeSDK {
     public func syncBranding(
         since: String? = nil,
         completion: @escaping (Result<SyncResponse, Error>) -> Void
+    ) {
+        syncBrandingImpl(since: since, completion: completion, isRetry: false)
+    }
+
+    /// Internal sync with fail-safe: on first failure wipe local DB and retry one full sync.
+    private func syncBrandingImpl(
+        since: String?,
+        completion: @escaping (Result<SyncResponse, Error>) -> Void,
+        isRetry: Bool
     ) {
         let startedAt = Date()
         let deviceId = deviceIdentity.getOrCreateDeviceId()
@@ -361,7 +394,12 @@ public class SecureNodeSDK {
                         "error": error.localizedDescription
                     ]
                 )
-                completion(.failure(error))
+                if !isRetry {
+                    self?.database.resetAllData()
+                    self?.syncBrandingImpl(since: nil, completion: completion, isRetry: true)
+                } else {
+                    completion(.failure(error))
+                }
             }
         }
     }
@@ -400,7 +438,12 @@ public class SecureNodeSDK {
                 DispatchQueue.main.async {
                     CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
                         if let err = err {
-                            self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
+                            let ns = err as NSError
+                            if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
+                                self?.debugLogLine("call directory reload: extension not enabled (Settings > Phone > Call Blocking & Identification)")
+                            } else {
+                                self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
+                            }
                         } else {
                             self?.debugLogLine("call directory reload: ok \(entries.count) entries")
                         }

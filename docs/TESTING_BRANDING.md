@@ -1,5 +1,14 @@
 # Testing dialer and missed-call branding
 
+## Demo app: test incoming calls
+
+1. **Run on a physical iPhone** (Call Directory does not work in Simulator).
+2. **Enable the extension:** Settings → Phone → Call Blocking & Identification → turn on **SecureNode** (or your app name).
+3. In the app, tap **Sync branding** and wait for “call directory reload: ok N entries” in the API debug panel.
+4. **Call the device** from a number that has branding in your API response; the incoming screen should show the **brand label** (e.g. “Acme (Support)”).
+
+---
+
 The SDK applies branding on **two fronts**:
 
 1. **Contacts** – Maintains an updated list of contacts **grouped by branding profile**: one contact per brand, with up to N phone numbers per contact (configurable). Avoids creating unnecessary contacts; incrementally synced via a registry. Requires Contacts permission and App Group.

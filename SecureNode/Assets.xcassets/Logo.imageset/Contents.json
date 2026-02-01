@@ -1,12 +1,11 @@
 {
   "images" : [
     {
-      "filename" : "Logo.png",
+      "filename" : "apologo.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "SecureNode-verified.png",
       "idiom" : "universal",
       "scale" : "2x"
     },

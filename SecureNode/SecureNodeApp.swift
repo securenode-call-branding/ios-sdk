@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CallKit
 
 // MARK: - API key: set your SecureNode API key here
 private enum DemoConfig {
@@ -10,6 +11,7 @@ private enum DemoConfig {
 
 @main
 struct SecureNodeApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showIntroVideo = true
 
     var body: some Scene {
@@ -19,6 +21,11 @@ struct SecureNodeApp: App {
             } else {
                 ContentView()
                     .environmentObject(DemoSdkHolder.shared)
+            }
+        }
+        . onChange(of: scenePhase) { newPhase in
+            if newPhase == .active {
+                DemoSdkHolder.shared.triggerSync()
             }
         }
     }
@@ -33,7 +40,9 @@ final class DemoSdkHolder: ObservableObject {
         let config = SecureNodeConfig(
             apiURL: apiURL,
             apiKey: DemoConfig.apiKey,
-            campaignId: nil
+            campaignId: nil,
+            appGroupId: "group.SecureNodeKit.SecureNode",
+            callDirectoryExtensionBundleId: "SecureNodeKit.SecureNode.CallDirectory"
         )
         let options = SecureNodeOptions(debugLog: { [weak self] line in
             self?.addApiDebug(line)
@@ -60,6 +69,41 @@ final class DemoSdkHolder: ObservableObject {
         }
     }
 
+    /// Trigger branding sync (automatic on app active; no button required).
+    func triggerSync(completion: (() -> Void)? = nil) {
+        // Set initial UI state on main
+        DispatchQueue.main.async { [weak self] in
+            self?.lastSyncMessage = "Syncing…"
+            self?.addApiDebug("sync: start")
+        }
+
+        sdk.syncBranding(since: nil) { [weak self] result in
+            guard let self = self else { completion?(); return }
+
+            // Perform heavy/non-UI work off the main thread first
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.performPostSyncWork(result: result)
+
+                // Now update UI on main
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { completion?(); return }
+                    switch result {
+                    case .success(let response):
+                        self.lastSyncCount = response.branding.count
+                        self.lastSyncMessage = "Synced \(response.branding.count) items"
+                        self.addApiDebug("sync: ok \(response.branding.count) items")
+                        // loadSyncedBranding already uses a background queue internally
+                        self.loadSyncedBranding()
+                    case .failure(let error):
+                        self.lastSyncMessage = "Error: \(error.localizedDescription)"
+                        self.addApiDebug("sync: err \(error.localizedDescription)")
+                    }
+                    completion?()
+                }
+            }
+        }
+    }
+
     func addApiDebug(_ line: String) {
         if Thread.isMainThread {
             apiDebugLines.append(line)
@@ -74,6 +118,37 @@ final class DemoSdkHolder: ObservableObject {
                     self.apiDebugLines.removeFirst(self.apiDebugLines.count - self.maxDebugLines)
                 }
             }
+        }
+    }
+
+    /// Perform heavy/non-UI follow-up work after a sync completes.
+    /// Run only from a background queue. Do not update UI/@Published properties here.
+    private func performPostSyncWork<T>(result: Result<T, Error>) {
+        switch result {
+        case .success(_):
+            // Example: If contacts or photos need to be written, do it here using CNContactStore/CNSaveRequest
+            // Ensure you fetch fresh contacts before update to avoid CNErrorDomain Code=200 (record does not exist).
+            // If an update fails with CNErrorDomain 200, consider falling back to add or skipping based on your sync intent.
+
+            // Example: Reload Call Directory extension off the main thread, as it can block.
+            #if canImport(CallKit)
+            let bundleId = "SecureNodeKit.SecureNode.CallDirectory"
+            DispatchQueue.global(qos: .utility).async {
+                let manager = CXCallDirectoryManager.sharedInstance
+                manager.reloadExtension(withIdentifier: bundleId) { error in
+                    if let error = error {
+                        self.addApiDebug("call directory reload error: \(error.localizedDescription)")
+                    } else {
+                        self.addApiDebug("call directory reload: requested")
+                    }
+                }
+            }
+            #endif
+
+            // Example: Any database/file I/O related to `response.branding` should be done here.
+
+        case .failure:
+            break
         }
     }
 

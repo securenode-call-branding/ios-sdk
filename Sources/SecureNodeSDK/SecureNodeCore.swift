@@ -135,19 +135,17 @@ final class SecureNodeCore {
         }
 
         let bundleId = config.callDirectoryExtensionBundleId
-        return try await withCheckedThrowingContinuation { cont in
+        let result: SecureNodeReloadReport = try await withCheckedThrowingContinuation { cont in
             CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: bundleId) { err in
                 if let err = err {
-                    self.reloadPolicy.recordReloadFailureNow()
                     cont.resume(returning: SecureNodeReloadReport(
                         attempted: true,
                         throttled: false,
-                        nextAllowedAt: self.reloadPolicy.nextAllowedAtIso(),
+                        nextAllowedAt: nil,
                         error: err.localizedDescription
                     ))
                     return
                 }
-                self.reloadPolicy.recordReloadSuccessNow()
                 cont.resume(returning: SecureNodeReloadReport(
                     attempted: true,
                     throttled: false,
@@ -156,6 +154,17 @@ final class SecureNodeCore {
                 ))
             }
         }
+        if result.error != nil {
+            reloadPolicy.recordReloadFailureNow()
+            return SecureNodeReloadReport(
+                attempted: true,
+                throttled: false,
+                nextAllowedAt: reloadPolicy.nextAllowedAtIso(),
+                error: result.error
+            )
+        }
+        reloadPolicy.recordReloadSuccessNow()
+        return result
     }
 
     func health() -> SecureNodeHealthReport {

@@ -38,7 +38,7 @@ class BrandingDatabase {
     @inline(__always)
     private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ text: String?) {
         if let text = text {
-            text.withCString { cStr in
+            _ = text.withCString { cStr in
                 sqlite3_bind_text(stmt, index, cStr, -1, Self.SQLITE_TRANSIENT)
             }
         } else {
@@ -451,6 +451,36 @@ class BrandingDatabase {
                 rollbackTransaction()
             }
         }
+    }
+
+    /**
+     * Wipe all local data (branding cache, pending events, pending telemetry).
+     * Use after a sync failure to allow a clean full re-sync and avoid corruption.
+     */
+    func resetAllData() {
+        queue.sync {
+            resetAllDataImpl()
+        }
+    }
+
+    private func resetAllDataImpl() {
+        beginTransaction()
+        var success = true
+        for table in ["branding", "pending_events", "pending_telemetry"] {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "DELETE FROM \(table);", -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                success = false
+                break
+            }
+            if sqlite3_step(stmt) != SQLITE_DONE {
+                sqlite3_finalize(stmt)
+                success = false
+                break
+            }
+            sqlite3_finalize(stmt)
+        }
+        if success { commitTransaction() } else { rollbackTransaction() }
     }
 
     struct PendingEventRow {

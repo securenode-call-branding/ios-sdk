@@ -1,0 +1,59 @@
+{
+  "configurations" : [
+    {
+      "id" : "90A2E5CC-4E3A-447E-9082-7286321BC1A2",
+      "name" : "Test Scheme Action",
+      "options" : {
+        "distributor" : "com.apple.AppStore"
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "diagnosticCollectionPolicy" : "Always",
+    "environmentVariableEntries" : [
+      {
+        "key" : "baseurl",
+        "value" : "edge.securenode.io"
+      },
+      {
+        "key" : "hostapp",
+        "value" : "securenodesdk"
+      },
+      {
+        "key" : "apikey",
+        "value" : "sn_live_de23756e5c16bcd94f763f5a8320ccb2"
+      }
+    ],
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:SecureNode.xcodeproj",
+      "identifier" : "7CAED28A2F2A943D0051CBEB",
+      "name" : "SecureNode"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "selectedTags" : {
+        "includeXCTests" : true
+      },
+      "target" : {
+        "containerPath" : "container:SecureNode.xcodeproj",
+        "identifier" : "7CAED2992F2A94400051CBEB",
+        "name" : "SecureNodeTests"
+      }
+    },
+    {
+      "parallelizable" : true,
+      "selectedTags" : {
+        "includeXCTests" : true
+      },
+      "target" : {
+        "containerPath" : "container:SecureNode.xcodeproj",
+        "identifier" : "7CAED2A32F2A94400051CBEB",
+        "name" : "SecureNodeUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
