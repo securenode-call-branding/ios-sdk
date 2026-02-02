@@ -296,7 +296,7 @@ final class ManagedContactsSync {
 
     private func downloadAndProcessImage(urlString: String) async throws -> Data? {
         guard let url = URL(string: urlString) else { return nil }
-        var config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         let data = try await URLSession(configuration: config).data(from: url).0
         guard let img = UIImage(data: data) else { return nil }

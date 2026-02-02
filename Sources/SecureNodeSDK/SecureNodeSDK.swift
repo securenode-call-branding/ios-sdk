@@ -424,6 +424,39 @@ public class SecureNodeSDK {
         }
     }
 
+    /// Call on first launch / app active so the Call Directory extension can be enabled in Settings before the first sync. Writes an empty snapshot and reloads the extension if none exists; no-op if a snapshot is already present.
+    public func primeCallDirectoryIfNeeded() {
+        guard let group = config.appGroupId, let extId = config.callDirectoryExtensionBundleId,
+              !group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !extId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let store = SecureNodeAppGroupStore(appGroupId: group)
+                if try store.readCurrentPointer() != nil { return }
+                _ = try store.writeSnapshot(entries: [], sinceCursor: nil)
+                DispatchQueue.main.async {
+                    CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
+                        if let err = err {
+                            let ns = err as NSError
+                            if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
+                                self?.debugLogLine("call directory prime: extension not enabled (Settings > Phone > Call Blocking & Identification)")
+                            } else {
+                                self?.debugLogLine("call directory prime: err \(err.localizedDescription)")
+                            }
+                        } else {
+                            self?.debugLogLine("call directory prime: ok (empty snapshot)")
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.debugLogLine("call directory prime: err \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     /// When appGroupId + callDirectoryExtensionBundleId are set, writes snapshot to App Group and reloads Call Directory so dialer/missed-call show branding and OS bypasses unknown/spam filtering.
     private func writeCallDirectorySnapshotAndReloadIfConfigured(branding: [BrandingInfo], sinceCursor: String?) {
         guard let group = config.appGroupId, let extId = config.callDirectoryExtensionBundleId,
