@@ -97,8 +97,13 @@ class ApiClient {
                 } else {
                     bodySnippet = "(no body)"
                 }
-                self?.log("\(method) \(path) -> \(httpResponse.statusCode) \(bodySnippet)")
-                completion(.failure(ApiError.invalidResponse))
+                let code = httpResponse.statusCode
+                if code == 403 {
+                    self?.log("\(method) \(path) -> 403 Forbidden (check API key and permissions)")
+                } else {
+                    self?.log("\(method) \(path) -> \(code) \(bodySnippet)")
+                }
+                completion(.failure(ApiError.httpStatus(code, bodySnippet)))
                 return
             }
 
@@ -606,9 +611,23 @@ public struct BrandingEventResponse: Codable {
 /**
  * API errors
  */
-enum ApiError: Error {
+enum ApiError: Error, LocalizedError {
     case invalidURL
     case invalidResponse
     case noData
+    /// HTTP status outside 2xx (e.g. 403 Forbidden). Associated: statusCode, optional response body snippet.
+    case httpStatus(Int, String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL: return "Invalid API URL"
+        case .invalidResponse: return "Invalid API response"
+        case .noData: return "No data from API"
+        case .httpStatus(403, _): return "403 Forbidden — check API key and permissions"
+        case .httpStatus(let code, let body):
+            if let body = body, !body.isEmpty { return "API error \(code): \(body)" }
+            return "API error \(code)"
+        }
+    }
 }
 

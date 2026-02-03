@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var lookupNumber = ""
     @State private var lookupResult: String = ""
     @State private var selectedContact: BrandingInfo?
+    @State private var showShareLog = false
+    @State private var logTextToShare: String = ""
 
     var body: some View {
         Group {
@@ -68,9 +70,25 @@ struct ContentView: View {
     @ViewBuilder
     private var debugPanel: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("API debug")
+            HStack {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(connectivityColor)
+                        .frame(width: 8, height: 8)
+                    Text(connectivityLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text("API debug")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Email logs") {
+                    logTextToShare = demo.fullDebugLogText()
+                    showShareLog = true
+                }
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
@@ -96,6 +114,26 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .sheet(isPresented: $showShareLog) {
+            ShareSheet(activityItems: [logTextToShare])
+        }
+    }
+
+    private var connectivityColor: Color {
+        switch demo.apiReachability {
+        case .reachable: return .green
+        case .unreachable: return .red
+        case .checking, .unknown: return .gray
+        }
+    }
+
+    private var connectivityLabel: String {
+        switch demo.apiReachability {
+        case .reachable: return "API: OK"
+        case .unreachable: return "API: Unavailable"
+        case .checking: return "API: Checking…"
+        case .unknown: return "API: —"
+        }
     }
 
     @ViewBuilder
@@ -292,6 +330,16 @@ private struct ScrollDismissesKeyboardModifier: ViewModifier {
             content
         }
     }
+}
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 #Preview {

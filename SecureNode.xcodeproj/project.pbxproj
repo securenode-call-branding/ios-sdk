@@ -58,6 +58,28 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		7CAED2B72F2A94400051CBEB /* Inject Xcode Cloud API key */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Inject Xcode Cloud API key";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -n \"$SECURENODE_API_KEY\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :SecureNodeAPIKey $SECURENODE_API_KEY\" \"$SRCROOT/Info.plist\"\nfi\nif [ -n \"$SECURENODE_API_URL\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :SecureNodeAPIURL $SECURENODE_API_URL\" \"$SRCROOT/Info.plist\"\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXFileReference section */
 		7C7DA6EE2F2C3CED00227B4A /* Info 2.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 2.plist"; sourceTree = "<group>"; };
 		7C7DA79E2F2C405D00227B4A /* Info 3.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info 3.plist"; sourceTree = "<group>"; };
@@ -187,6 +209,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7CAED2AE2F2A94400051CBEB /* Build configuration list for PBXNativeTarget "SecureNode" */;
 			buildPhases = (
+				7CAED2B72F2A94400051CBEB /* Inject Xcode Cloud API key */,
 				7CAED2872F2A943D0051CBEB /* Sources */,
 				7CAED2882F2A943D0051CBEB /* Frameworks */,
 				7CAED2892F2A943D0051CBEB /* Resources */,

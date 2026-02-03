@@ -9,6 +9,18 @@
 
 ---
 
+## API key via Xcode Cloud (update fleet from one place)
+
+The app reads the API key from **Info.plist** (`SecureNodeAPIKey`, `SecureNodeAPIURL`). For Xcode Cloud builds you can inject the key from **Shared Environment Variables** so you can rotate it without changing code:
+
+1. In your CI portal (Xcode Cloud): **Settings** → **Shared Environment Variables** → add **SECURENODE_API_KEY** (and optionally **SECURENODE_API_URL**). Mark as secret if available.
+2. The SecureNode target has a **Run Script** phase “Inject Xcode Cloud API key” that, when those env vars are set, writes them into `Info.plist` before the app is built.
+3. Rebuild and distribute (e.g. TestFlight). Devices that install that build get the key that was in the env at build time. To update the fleet, change the variable and run a new build.
+
+Local builds use the values in `Info.plist` (or the fallback in code) when the env vars are not set.
+
+---
+
 ## Quick: Ad Hoc IPA (single file for manual install)
 
 1. **Register devices** (one-time per device): [Apple Developer](https://developer.apple.com/account) → Certificates, Identifiers & Profiles → **Devices** → + → add the tester’s device name and **UDID**. (UDID: device connected to Mac → Finder → select device → click serial number until UDID appears; or Settings → General → About on device, or use a UDID lookup site.)

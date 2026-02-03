@@ -2,12 +2,22 @@ import SwiftUI
 import Combine
 import CallKit
 import Contacts
+import Network
 
-// MARK: - API key: set your SecureNode API key here
+// MARK: - API key: from Info.plist (Xcode Cloud injects via run script + SECURENODE_API_KEY) or fallback for local dev
 private enum DemoConfig {
-    /// Replace with your API key from the SecureNode dashboard (e.g. sn_live_... or sn_test_...).
-    static let apiKey = "sn_live_de23756e5c16bcd94f763f5a8320ccb2"
-    static let apiURLString = "https://api.securenode.io"
+    private static let fallbackApiKey = "sn_live_de23756e5c16bcd94f763f5a8320ccb2"
+    private static let fallbackApiURL = "https://api.securenode.io"
+    static var apiKey: String {
+        guard let s = Bundle.main.infoDictionary?["SecureNodeAPIKey"] as? String,
+              !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fallbackApiKey }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static var apiURLString: String {
+        guard let s = Bundle.main.infoDictionary?["SecureNodeAPIURL"] as? String,
+              !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fallbackApiURL }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 private let hasSeenTrustEngineNoticeKey = "SecureNode.hasSeenTrustEngineNotice"
@@ -29,10 +39,11 @@ struct SecureNodeApp: App {
             if newPhase == .active {
                 DemoSdkHolder.shared.sdk.requestContactsPermissionIfNeeded()
                 DemoSdkHolder.shared.sdk.primeCallDirectoryIfNeeded()
-                DemoSdkHolder.shared.triggerSync()
+                DemoSdkHolder.shared.checkConnectivityAndSync()
                 DemoSdkHolder.shared.schedulePermissionFailSafeCheck()
             } else if newPhase == .background {
                 DemoSdkHolder.shared.cancelPermissionFailSafeCheck()
+                DemoSdkHolder.shared.stopConnectivityWaiting()
             }
         }
     }
@@ -87,16 +98,27 @@ final class DemoSdkHolder: ObservableObject {
         return instance
     }()
 
+    enum ApiReachability {
+        case unknown
+        case checking
+        case reachable
+        case unreachable
+    }
+
     @Published var lastSyncMessage: String = "Ready"
     @Published var lastSyncCount: Int = 0
     @Published var syncedBranding: [BrandingInfo] = []
     @Published var alertMessage: String? = nil
     @Published var apiDebugLines: [String] = []
+    @Published var apiReachability: ApiReachability = .unknown
     @Published var showPermissionFailSafeAlert = false
     private var permissionFailSafeContactsNeeded = false
     private var permissionFailSafeCallDirectoryNeeded = false
     private var permissionFailSafeWorkItem: DispatchWorkItem?
     private let maxDebugLines = 50
+    private let connectivityQueue = DispatchQueue(label: "SecureNode.connectivity")
+    private var pathMonitor: NWPathMonitor?
+    private var reProbeTimer: DispatchSourceTimer?
 
     func loadSyncedBranding() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -106,6 +128,81 @@ final class DemoSdkHolder: ObservableObject {
                 self?.syncedBranding = list
             }
         }
+    }
+
+    // MARK: - Connectivity: probe API before sync; wait for network if unreachable
+
+    /// Probe API (lightweight GET). Any HTTP response = reachable; timeout/connection error = unreachable.
+    private func probeApiReachability(completion: @escaping (Bool) -> Void) {
+        let base = DemoConfig.apiURLString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let syncPath = base.hasSuffix("/api") ? "\(base)/mobile/branding/sync" : "\(base)/api/mobile/branding/sync"
+        guard let url = URL(string: syncPath) else { completion(false); return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(DemoConfig.apiKey, forHTTPHeaderField: "X-API-Key")
+        req.timeoutInterval = 5
+        URLSession.shared.dataTask(with: req) { _, response, error in
+            let reachable: Bool
+            if let res = response as? HTTPURLResponse {
+                reachable = (100...599).contains(res.statusCode)
+            } else {
+                reachable = (error == nil)
+            }
+            DispatchQueue.main.async { completion(reachable) }
+        }.resume()
+    }
+
+    /// Check connectivity; if reachable run sync; if not, wait for network change then retry.
+    func checkConnectivityAndSync() {
+        DispatchQueue.main.async { [weak self] in
+            self?.apiReachability = .checking
+        }
+        probeApiReachability { [weak self] reachable in
+            guard let self = self else { return }
+            if reachable {
+                self.apiReachability = .reachable
+                self.addApiDebug("api: reachable")
+                self.triggerSync()
+            } else {
+                self.apiReachability = .unreachable
+                self.addApiDebug("api: unreachable, waiting for network")
+                self.startConnectivityWaiting()
+            }
+        }
+    }
+
+    private func startConnectivityWaiting() {
+        stopConnectivityWaiting()
+        pathMonitor = NWPathMonitor()
+        pathMonitor?.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            self?.connectivityQueue.async { self?.reProbeWhenReachable() }
+        }
+        pathMonitor?.start(queue: connectivityQueue)
+        let timer = DispatchSource.makeTimerSource(queue: connectivityQueue)
+        timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(5))
+        timer.setEventHandler { [weak self] in
+            self?.reProbeWhenReachable()
+        }
+        timer.resume()
+        reProbeTimer = timer
+    }
+
+    private func reProbeWhenReachable() {
+        probeApiReachability { [weak self] reachable in
+            guard let self = self, reachable else { return }
+            self.stopConnectivityWaiting()
+            self.addApiDebug("api: reachable (retry)")
+            self.apiReachability = .reachable
+            self.triggerSync()
+        }
+    }
+
+    func stopConnectivityWaiting() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        reProbeTimer?.cancel()
+        reProbeTimer = nil
     }
 
     /// Trigger branding sync (automatic on app active; no button required).
@@ -164,6 +261,18 @@ final class DemoSdkHolder: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Full debug log text for sharing (e.g. email). Include sync state and all API debug lines.
+    func fullDebugLogText() -> String {
+        let header = """
+        SecureNode Trust Engine — Debug Log
+        \(ISO8601DateFormatter().string(from: Date()))
+        Sync: \(lastSyncMessage) | Contacts: \(syncedBranding.count) | Last count: \(lastSyncCount)
+
+        """
+        let lines = apiDebugLines.joined(separator: "\n")
+        return header + lines
     }
 
     /// Perform heavy/non-UI follow-up work after a sync completes.
