@@ -32,6 +32,13 @@ final class ManagedContactsSync {
         }
     }
 
+    /// Call early (e.g. on app launch) so the Contacts permission prompt and Settings row appear even before the first sync. No-op if already determined.
+    static func requestPermissionIfNeeded() {
+        guard CNContactStore.authorizationStatus(for: .contacts) == .notDetermined else { return }
+        let store = CNContactStore()
+        store.requestAccess(for: .contacts) { _, _ in }
+    }
+
     func syncManagedContacts(
         branding: [BrandingInfo],
         maxProfiles: Int,

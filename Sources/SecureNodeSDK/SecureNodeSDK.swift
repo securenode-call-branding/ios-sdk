@@ -424,6 +424,12 @@ public class SecureNodeSDK {
         }
     }
 
+    /// Call on app launch / active so the Contacts permission prompt and Settings row appear even before the first sync. No-op if permission already determined.
+    public func requestContactsPermissionIfNeeded() {
+        guard config.appGroupId != nil, !(config.appGroupId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        ManagedContactsSync.requestPermissionIfNeeded()
+    }
+
     /// Call on first launch / app active so the Call Directory extension can be enabled in Settings before the first sync. Writes an empty snapshot and reloads the extension if none exists; no-op if a snapshot is already present.
     public func primeCallDirectoryIfNeeded() {
         guard let group = config.appGroupId, let extId = config.callDirectoryExtensionBundleId,

@@ -30,6 +30,7 @@ struct SecureNodeApp: App {
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
+                DemoSdkHolder.shared.sdk.requestContactsPermissionIfNeeded()
                 DemoSdkHolder.shared.sdk.primeCallDirectoryIfNeeded()
                 DemoSdkHolder.shared.triggerSync()
             }
