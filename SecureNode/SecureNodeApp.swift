@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import CallKit
+import Contacts
 
 // MARK: - API key: set your SecureNode API key here
 private enum DemoConfig {
@@ -10,6 +11,7 @@ private enum DemoConfig {
 }
 
 private let hasSeenTrustEngineNoticeKey = "SecureNode.hasSeenTrustEngineNotice"
+private let callDirectoryBundleId = "SecureNodeKit.SecureNode.CallDirectory"
 
 @main
 struct SecureNodeApp: App {
@@ -19,21 +21,46 @@ struct SecureNodeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if !hasSeenTrustEngineNotice {
-                TrustEngineNoticeView(onContinue: { hasSeenTrustEngineNotice = true })
-            } else if showIntroVideo {
-                IntroVideoView(onFinish: { showIntroVideo = false })
-            } else {
-                ContentView()
-                    .environmentObject(DemoSdkHolder.shared)
-            }
+            SecureNodeRootView(hasSeenTrustEngineNotice: $hasSeenTrustEngineNotice, showIntroVideo: $showIntroVideo)
+                .environmentObject(DemoSdkHolder.shared)
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 DemoSdkHolder.shared.sdk.requestContactsPermissionIfNeeded()
                 DemoSdkHolder.shared.sdk.primeCallDirectoryIfNeeded()
                 DemoSdkHolder.shared.triggerSync()
+                DemoSdkHolder.shared.schedulePermissionFailSafeCheck()
+            } else if newPhase == .background {
+                DemoSdkHolder.shared.cancelPermissionFailSafeCheck()
             }
+        }
+    }
+}
+
+/// Root view so the permission fail-safe alert can be shown from any screen.
+private struct SecureNodeRootView: View {
+    @EnvironmentObject var demo: DemoSdkHolder
+    @Binding var hasSeenTrustEngineNotice: Bool
+    @Binding var showIntroVideo: Bool
+
+    var body: some View {
+        Group {
+            if !hasSeenTrustEngineNotice {
+                TrustEngineNoticeView(onContinue: { hasSeenTrustEngineNotice = true })
+            } else if showIntroVideo {
+                IntroVideoView(onFinish: { showIntroVideo = false })
+            } else {
+                ContentView()
+            }
+        }
+        .alert("Permissions needed", isPresented: Binding(
+            get: { demo.showPermissionFailSafeAlert },
+            set: { if !$0 { demo.dismissPermissionFailSafeAlert() } }
+        )) {
+            Button("Open Settings") { demo.openPermissionSettings() }
+            Button("Not now", role: .cancel) { demo.dismissPermissionFailSafeAlert() }
+        } message: {
+            Text("SecureNode needs these permissions to verify caller identity and ensure incoming calls are verified.")
         }
     }
 }
@@ -64,6 +91,10 @@ final class DemoSdkHolder: ObservableObject {
     @Published var syncedBranding: [BrandingInfo] = []
     @Published var alertMessage: String? = nil
     @Published var apiDebugLines: [String] = []
+    @Published var showPermissionFailSafeAlert = false
+    private var permissionFailSafeContactsNeeded = false
+    private var permissionFailSafeCallDirectoryNeeded = false
+    private var permissionFailSafeWorkItem: DispatchWorkItem?
     private let maxDebugLines = 50
 
     func loadSyncedBranding() {
@@ -157,6 +188,63 @@ final class DemoSdkHolder: ObservableObject {
         case .failure:
             break
         }
+    }
+
+    // MARK: - Permission fail-safe (demo: check ~1 min after active, prompt to open Settings if needed)
+
+    func schedulePermissionFailSafeCheck() {
+        cancelPermissionFailSafeCheck()
+        let item = DispatchWorkItem { [weak self] in
+            self?.runPermissionFailSafeCheck()
+        }
+        permissionFailSafeWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: item)
+    }
+
+    func cancelPermissionFailSafeCheck() {
+        permissionFailSafeWorkItem?.cancel()
+        permissionFailSafeWorkItem = nil
+    }
+
+    private func runPermissionFailSafeCheck() {
+        permissionFailSafeWorkItem = nil
+        let contactsAuthorized = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        if !contactsAuthorized {
+            sdk.requestContactsPermissionIfNeeded()
+        }
+        CXCallDirectoryManager.sharedInstance.getEnabledStatusForExtension(withIdentifier: callDirectoryBundleId) { [weak self] status, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let callDirectoryEnabled = (status == .enabled)
+                if contactsAuthorized && callDirectoryEnabled { return }
+                self.permissionFailSafeContactsNeeded = !contactsAuthorized
+                self.permissionFailSafeCallDirectoryNeeded = !callDirectoryEnabled
+                self.showPermissionFailSafeAlert = true
+            }
+        }
+    }
+
+    func openPermissionSettings() {
+        if permissionFailSafeContactsNeeded {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        }
+        if permissionFailSafeCallDirectoryNeeded {
+            let delay = permissionFailSafeContactsNeeded ? 1.5 : 0.0
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                CXCallDirectoryManager.sharedInstance.openSettings { _ in }
+                self?.dismissPermissionFailSafeAlert()
+            }
+            return
+        }
+        dismissPermissionFailSafeAlert()
+    }
+
+    func dismissPermissionFailSafeAlert() {
+        showPermissionFailSafeAlert = false
+        permissionFailSafeContactsNeeded = false
+        permissionFailSafeCallDirectoryNeeded = false
     }
 
     private init() {

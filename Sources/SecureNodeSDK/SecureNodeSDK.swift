@@ -441,18 +441,18 @@ public class SecureNodeSDK {
                 let store = SecureNodeAppGroupStore(appGroupId: group)
                 if try store.readCurrentPointer() != nil { return }
                 _ = try store.writeSnapshot(entries: [], sinceCursor: nil)
-                DispatchQueue.main.async {
-                    CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
-                        if let err = err {
-                            let ns = err as NSError
-                            if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
-                                self?.debugLogLine("call directory prime: extension not enabled (Settings > Phone > Call Blocking & Identification)")
-                            } else {
-                                self?.debugLogLine("call directory prime: err \(err.localizedDescription)")
-                            }
+                CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
+                    if let err = err {
+                        let ns = err as NSError
+                        if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
+                            self?.debugLogLine("call directory prime: extension not enabled (Settings > Phone > Call Blocking & Identification)")
+                        } else if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 7 {
+                            self?.debugLogLine("call directory prime: extension currently loading (ok)")
                         } else {
-                            self?.debugLogLine("call directory prime: ok (empty snapshot)")
+                            self?.debugLogLine("call directory prime: err \(err.localizedDescription)")
                         }
+                    } else {
+                        self?.debugLogLine("call directory prime: ok (empty snapshot)")
                     }
                 }
             } catch {
@@ -474,18 +474,33 @@ public class SecureNodeSDK {
                 let store = SecureNodeAppGroupStore(appGroupId: group)
                 let entries = SecureNodeDirectoryBuilder.buildSnapshotEntries(from: branding, maxActiveNumbers: maxActive)
                 _ = try store.writeSnapshot(entries: entries, sinceCursor: sinceCursor)
-                DispatchQueue.main.async {
-                    CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
-                        if let err = err {
-                            let ns = err as NSError
-                            if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
-                                self?.debugLogLine("call directory reload: extension not enabled (Settings > Phone > Call Blocking & Identification)")
-                            } else {
-                                self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
+                let queue = DispatchQueue.global(qos: .utility)
+                CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
+                    if let err = err {
+                        let ns = err as NSError
+                        if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
+                            self?.debugLogLine("call directory reload: extension not enabled (Settings > Phone > Call Blocking & Identification)")
+                        } else if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 7 {
+                            self?.debugLogLine("call directory reload: extension currently loading (retry in 3s)")
+                            queue.asyncAfter(deadline: .now() + 3) {
+                                CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] retryErr in
+                                    if let retryErr = retryErr {
+                                        let retryNs = retryErr as NSError
+                                        if retryNs.domain == "com.apple.CallKit.error.calldirectorymanager", retryNs.code == 7 {
+                                            self?.debugLogLine("call directory reload: still loading (data will apply on next open)")
+                                        } else {
+                                            self?.debugLogLine("call directory reload: retry err \(retryErr.localizedDescription)")
+                                        }
+                                    } else {
+                                        self?.debugLogLine("call directory reload: ok \(entries.count) entries (after retry)")
+                                    }
+                                }
                             }
                         } else {
-                            self?.debugLogLine("call directory reload: ok \(entries.count) entries")
+                            self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
                         }
+                    } else {
+                        self?.debugLogLine("call directory reload: ok \(entries.count) entries")
                     }
                 }
             } catch {
