@@ -11,6 +11,7 @@ private enum DemoConfig {
 }
 
 private let hasSeenTrustEngineNoticeKey = "SecureNode.hasSeenTrustEngineNotice"
+private let hasExitedAfterFirstSyncKey = "SecureNode.hasExitedAfterFirstSync"
 private let callDirectoryBundleId = "SecureNodeKit.SecureNode.CallDirectory"
 
 @main
@@ -130,8 +131,14 @@ final class DemoSdkHolder: ObservableObject {
                         self.lastSyncCount = response.branding.count
                         self.lastSyncMessage = "Synced \(response.branding.count) items"
                         self.addApiDebug("sync: ok \(response.branding.count) items")
-                        // loadSyncedBranding already uses a background queue internally
                         self.loadSyncedBranding()
+                        if !UserDefaults.standard.bool(forKey: hasExitedAfterFirstSyncKey) {
+                            UserDefaults.standard.set(true, forKey: hasExitedAfterFirstSyncKey)
+                            self.lastSyncMessage = "First sync complete. Closing so you can reopen and verify."
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                                exit(0)
+                            }
+                        }
                     case .failure(let error):
                         self.lastSyncMessage = "Error: \(error.localizedDescription)"
                         self.addApiDebug("sync: err \(error.localizedDescription)")
