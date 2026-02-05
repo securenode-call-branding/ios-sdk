@@ -68,7 +68,7 @@ dependencies: [
 import SecureNodeSDK
 
 SecureNode.configure(.init(
-  apiURL: URL(string: "https://verify.securenode.io")!,
+  apiURL: URL(string: "https://edge.securenode.io")!,
   apiKey: "your-api-key-here",
   appGroupId: "group.com.customer.app.securenode",
   callDirectoryExtensionBundleId: "com.customer.app.CallDirectoryExtension"
