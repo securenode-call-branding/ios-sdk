@@ -1,0 +1,22 @@
+# Run only when source or project changes. Ignore docs, README, and workflow changes.
+name: Build
+on:
+  push:
+    paths-ignore:
+      - 'README.md'
+      - '.github/**'
+      - 'docs/**'
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - '.github/**'
+      - 'docs/**'
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          echo "SECURENODE CLOUD BUILD"
+          xcodebuild -scheme SecureNode -destination 'generic/platform=iOS' -quiet build

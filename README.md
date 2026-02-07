@@ -171,6 +171,17 @@ No host code is required; the SDK starts the heartbeat timer in `init`. The back
 
 ---
 
+## Call Directory vs Contacts
+
+The system dialer can show caller names from **Call Directory** (our extension) and from **Contacts** (user contacts or our managed contacts). iOS does not indicate which source provided the name.
+
+**How to tell:**
+
+- **In-app:** Use `getCallDirectoryExtensionEnabled(completion:)` and `getCallDirectorySnapshotEntryCount()` (SecureNodeSDK) to confirm the extension is on and how many numbers are in the dialer. If the extension is off and you still see a name for a branded number, it is coming from Contacts.
+- **Toggle test:** Turn off the Call Directory app in **Settings > Phone > Call Blocking & Identification**. Call (or receive a call) from a branded number. If the name disappears, it was from Call Directory; if it stays, it was from Contacts.
+
+---
+
 ## Call event reporting (optional)
 
 Use `SecureNodeSDK` for VoIP / CallKit flows where your app owns the call event.  

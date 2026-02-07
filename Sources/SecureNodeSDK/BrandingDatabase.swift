@@ -92,7 +92,7 @@ class BrandingDatabase {
                 let msg = String(cString: res)
                 ok = (msg == "ok")
                 if !ok {
-                    print("PRAGMA quick_check reported: \(msg)")
+                    print("(db:err) quick_check \(msg)")
                 }
             }
         }
@@ -107,15 +107,9 @@ class BrandingDatabase {
 
         openDatabase()
         createTable()
-        #if DEBUG
-        print("BrandingDatabase init: opened at \(dbPath)")
-        #endif
     }
 
     deinit {
-        #if DEBUG
-        print("BrandingDatabase deinit: closing")
-        #endif
         closeDatabase()
     }
     

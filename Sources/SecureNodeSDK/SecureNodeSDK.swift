@@ -1,6 +1,5 @@
 import Foundation
 import CallKit
-import os.log
 import UIKit
 #if canImport(BackgroundTasks)
 import BackgroundTasks
@@ -8,32 +7,6 @@ import BackgroundTasks
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
-
-// MARK: - Logging compatibility shim (iOS 13 support)
-fileprivate struct SNLogger {
-    #if canImport(os)
-    private let oslog: OSLog
-    #endif
-    init(subsystem: String, category: String) {
-        #if canImport(os)
-        self.oslog = OSLog(subsystem: subsystem, category: category)
-        #endif
-    }
-    func info(_ message: String) {
-        if #available(iOS 14.0, *) {
-            // Use new Logger API when available
-            let logger = os.Logger(subsystem: "SecureNodeSDK", category: "api")
-            logger.info("\(message, privacy: .public)")
-        } else {
-            // Fallback for iOS 13
-            #if canImport(os)
-            os_log("%{public}@", log: oslog, type: .info, message)
-            #else
-            print(message)
-            #endif
-        }
-    }
-}
 
 /**
  * SecureNode iOS SDK
@@ -66,11 +39,8 @@ public class SecureNodeSDK {
     private let staleSeconds: TimeInterval = 24 * 60 * 60
     private let presenceHeartbeatInterval: TimeInterval = 5 * 60
 
-    private static let log = SNLogger(subsystem: "SecureNodeSDK", category: "api")
-
-    /// Invoke optional debug logger on main thread (for app debug UI); also logs to os_log for Console.app.
+    /// Invoke optional debug logger on main thread (for app debug UI). One (event:id) per routine completion; errors only when they occur.
     private func debugLogLine(_ line: String) {
-        Self.log.info(line)
         guard options.debugLog != nil else { return }
         if Thread.isMainThread {
             options.debugLog?(line)
@@ -146,8 +116,8 @@ public class SecureNodeSDK {
             customerAccountNumber: options.customerAccountNumber
         ) { [weak self] result in
             switch result {
-            case .success: self?.debugLogLine("register: ok")
-            case .failure(let e): self?.debugLogLine("register: err \(e.localizedDescription)")
+            case .success: self?.debugLogLine("(register:ok)")
+            case .failure(let e): self?.debugLogLine("(register:err) \(e.localizedDescription)")
             }
             self?.sendDeviceUpdateNow(lastSeen: ISO8601DateFormatter().string(from: Date()))
         }
@@ -237,8 +207,8 @@ public class SecureNodeSDK {
             lastSeen: now
         ) { [weak self] result in
             switch result {
-            case .success: self?.debugLogLine("device update: ok")
-            case .failure(let e): self?.debugLogLine("device update: err \(e.localizedDescription)")
+            case .success: self?.debugLogLine("(device_update:ok)")
+            case .failure(let e): self?.debugLogLine("(device_update:err) \(e.localizedDescription)")
             }
         }
     }
@@ -268,7 +238,7 @@ public class SecureNodeSDK {
             do {
                 try BGTaskScheduler.shared.submit(request)
             } catch {
-                print("SecureNodeSDK: scheduleBackgroundRefresh failed: \(error.localizedDescription)")
+                self.debugLogLine("(bg_schedule:err) \(error.localizedDescription)")
             }
         }
     }
@@ -364,18 +334,14 @@ public class SecureNodeSDK {
 
                 // POST sync ack so server knows sync was applied (OpenAPI: last_synced_at, optional e164_numbers).
                 let e164s = response.branding.map(\.phoneNumberE164)
-                self?.apiClient.syncAck(lastSyncedAt: response.syncedAt, e164Numbers: e164s.isEmpty ? nil : e164s) { [weak self] result in
-                    switch result {
-                    case .success: self?.debugLogLine("sync ack: ok")
-                    case .failure(let e): self?.debugLogLine("sync ack: err \(e.localizedDescription)")
-                    }
-                }
+                self?.apiClient.syncAck(lastSyncedAt: response.syncedAt, e164Numbers: e164s.isEmpty ? nil : e164s) { _ in }
 
                 // POST debug/upload only when sync config.debug_ui allows (request_upload + allow_export).
                 if let debugUi = response.config?.debugUi, debugUi.requestUpload == true, debugUi.allowExport == true {
                     self?.apiClient.uploadDebug(deviceId: deviceId, nonce: UUID().uuidString) { _ in }
                 }
 
+                self?.debugLogLine("(sync:ok)")
                 // Call Directory: write snapshot and reload so dialer/missed-call show branding (when app group + extension configured).
                 self?.writeCallDirectorySnapshotAndReloadIfConfigured(branding: response.branding, sinceCursor: response.syncedAt)
                 // Contacts: grouped by branding profile, incremental; one contact per brand with up to N numbers.
@@ -383,6 +349,7 @@ public class SecureNodeSDK {
 
                 completion(.success(response))
             case .failure(let error):
+                self?.debugLogLine("(sync:err) \(error.localizedDescription)")
                 self?.trackTelemetry(
                     eventName: "sync",
                     level: "warn",
@@ -412,13 +379,13 @@ public class SecureNodeSDK {
         Task {
             do {
                 let sync = ManagedContactsSync(appGroupId: group)
-                let result = try await sync.syncManagedContacts(branding: branding, maxProfiles: maxProfiles, maxPhoneNumbersPerContact: maxNumbers)
+                try await _ = sync.syncManagedContacts(branding: branding, maxProfiles: maxProfiles, maxPhoneNumbersPerContact: maxNumbers)
                 await MainActor.run { [weak self] in
-                    self?.debugLogLine("contacts sync: ok upserted \(result.upserted) deleted \(result.deleted) photos \(result.photosApplied)")
+                    self?.debugLogLine("(contacts_sync:ok)")
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    self?.debugLogLine("contacts sync: err \(error.localizedDescription)")
+                    self?.debugLogLine("(contacts_sync:err) \(error.localizedDescription)")
                 }
             }
         }
@@ -443,21 +410,14 @@ public class SecureNodeSDK {
                 _ = try store.writeSnapshot(entries: [], sinceCursor: nil)
                 CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
                     if let err = err {
-                        let ns = err as NSError
-                        if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
-                            self?.debugLogLine("call directory prime: extension not enabled (Settings > Phone > Call Blocking & Identification)")
-                        } else if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 7 {
-                            self?.debugLogLine("call directory prime: extension currently loading (ok)")
-                        } else {
-                            self?.debugLogLine("call directory prime: err \(err.localizedDescription)")
-                        }
+                        self?.debugLogLine("(cd_prime:err) \(err.localizedDescription)")
                     } else {
-                        self?.debugLogLine("call directory prime: ok (empty snapshot)")
+                        self?.debugLogLine("(cd_prime:ok)")
                     }
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
-                    self?.debugLogLine("call directory prime: err \(error.localizedDescription)")
+                    self?.debugLogLine("(cd_prime:err) \(error.localizedDescription)")
                 }
             }
         }
@@ -478,34 +438,26 @@ public class SecureNodeSDK {
                 CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] err in
                     if let err = err {
                         let ns = err as NSError
-                        if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 6 {
-                            self?.debugLogLine("call directory reload: extension not enabled (Settings > Phone > Call Blocking & Identification)")
-                        } else if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 7 {
-                            self?.debugLogLine("call directory reload: extension currently loading (retry in 3s)")
+                        if ns.domain == "com.apple.CallKit.error.calldirectorymanager", ns.code == 7 {
                             queue.asyncAfter(deadline: .now() + 3) {
                                 CXCallDirectoryManager.sharedInstance.reloadExtension(withIdentifier: extId) { [weak self] retryErr in
                                     if let retryErr = retryErr {
-                                        let retryNs = retryErr as NSError
-                                        if retryNs.domain == "com.apple.CallKit.error.calldirectorymanager", retryNs.code == 7 {
-                                            self?.debugLogLine("call directory reload: still loading (data will apply on next open)")
-                                        } else {
-                                            self?.debugLogLine("call directory reload: retry err \(retryErr.localizedDescription)")
-                                        }
+                                        self?.debugLogLine("(cd_reload:err) \(retryErr.localizedDescription)")
                                     } else {
-                                        self?.debugLogLine("call directory reload: ok \(entries.count) entries (after retry)")
+                                        self?.debugLogLine("(cd_reload:ok)")
                                     }
                                 }
                             }
                         } else {
-                            self?.debugLogLine("call directory reload: err \(err.localizedDescription)")
+                            self?.debugLogLine("(cd_reload:err) \(err.localizedDescription)")
                         }
                     } else {
-                        self?.debugLogLine("call directory reload: ok \(entries.count) entries")
+                        self?.debugLogLine("(cd_reload:ok)")
                     }
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
-                    self?.debugLogLine("call directory snapshot: err \(error.localizedDescription)")
+                    self?.debugLogLine("(cd_snapshot:err) \(error.localizedDescription)")
                 }
             }
         }
@@ -532,6 +484,25 @@ public class SecureNodeSDK {
      */
     public func listSyncedBranding(limit: Int = 500) -> [BrandingInfo] {
         database.listAllBranding(limit: limit)
+    }
+
+    /// Number of entries in the Call Directory snapshot (dialer/missed-call). Nil if app group not set or no snapshot.
+    public func getCallDirectorySnapshotEntryCount() -> Int? {
+        guard let group = config.appGroupId, !group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let store = SecureNodeAppGroupStore(appGroupId: group)
+        guard let pointer = try? store.readCurrentPointer() else { return nil }
+        return pointer.count
+    }
+
+    /// Whether the Call Directory extension is enabled in Settings > Phone > Call Blocking & Identification.
+    public func getCallDirectoryExtensionEnabled(completion: @escaping (Bool) -> Void) {
+        guard let extId = config.callDirectoryExtensionBundleId, !extId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DispatchQueue.main.async { completion(false) }
+            return
+        }
+        CXCallDirectoryManager.sharedInstance.getEnabledStatusForExtension(withIdentifier: extId) { status, _ in
+            DispatchQueue.main.async { completion(status == .enabled) }
+        }
     }
 
     /**
@@ -628,6 +599,15 @@ public class SecureNodeSDK {
                         "error": error.localizedDescription
                     ]
                 )
+                let noMatch = BrandingInfo(
+                    phoneNumberE164: phoneNumber,
+                    brandName: nil,
+                    logoUrl: nil,
+                    callReason: nil,
+                    brandId: nil,
+                    updatedAt: ""
+                )
+                self?.reportLookupOutcome(phoneNumber: phoneNumber, branding: noMatch)
                 completion(.failure(error))
             }
         }
@@ -812,13 +792,13 @@ public class SecureNodeSDK {
         ) { [weak self] result in
             switch result {
             case .success(let resp):
-                self?.debugLogLine("event: \(outcome) ok")
+                self?.debugLogLine("(event:\(outcome))")
                 if let enabled = resp.config?.brandingEnabled {
                     self?.runtimeConfig.setBrandingEnabled(enabled)
                 }
                 completion?(.success(resp))
             case .failure(let err):
-                self?.debugLogLine("event: err \(err.localizedDescription)")
+                self?.debugLogLine("(event:err) \(err.localizedDescription)")
                 let iso = observedAt
                 self?.database.insertPendingEvent(
                     phoneNumberE164: phoneNumberE164,
@@ -968,11 +948,17 @@ public class SecureNodeSDK {
     ) {
         let enabled = runtimeConfig.isBrandingEnabled()
 
-        // Always report the call; branding is optional.
+        // Always report the call; branding is optional. Every call branding event is reported (full or not).
         func report(update: CXCallUpdate, assisted: Bool) {
             provider.reportNewIncomingCall(with: uuid, update: update) { err in
                 if assisted && err == nil {
                     self.recordCallEvent(phoneNumberE164: phoneNumber, outcome: "assisted", surface: "callkit", completion: nil)
+                } else if assisted && err != nil {
+                    self.recordCallEvent(phoneNumberE164: phoneNumber, outcome: "no_match", surface: "callkit", brandingApplied: false, completion: nil)
+                } else if !assisted {
+                    self.recordCallEvent(phoneNumberE164: phoneNumber, outcome: "no_match", surface: "callkit", brandingApplied: false, completion: nil)
+                }
+                if assisted && err == nil {
                     // Best-effort: imprint for per-device activity (never blocks call UX)
                     let deviceId = self.deviceIdentity.getOrCreateDeviceId()
                     let osVersion = UIDevice.current.systemVersion

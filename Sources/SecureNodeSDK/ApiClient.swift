@@ -33,10 +33,6 @@ class ApiClient {
         self.debugLog = debugLog
     }
 
-    private func log(_ line: String) {
-        debugLog?(line)
-    }
-
     private func urlCandidates(_ path: String) -> [URL] {
         // path example: "mobile/branding/sync"; try /api/ path first (OpenAPI defines /api/mobile/...).
         return [
@@ -57,19 +53,11 @@ class ApiClient {
         }
 
         let request = build(first)
-        let method = request.httpMethod ?? "GET"
-        let path = first.path.isEmpty ? first.absoluteString : first.path
-        log("\(method) \(path)")
 
         session.dataTask(with: request) { [weak self] data, response, error in
             if let error = error {
                 let isCancelled = (error as? URLError)?.code == .cancelled
-                if isCancelled {
-                    self?.log("\(method) \(path) -> skipped (cancelled)")
-                } else {
-                    self?.log("\(method) \(path) -> err \(error.localizedDescription)")
-                }
-                if let self = self, urls.count > 1 {
+                if let self = self, !isCancelled, urls.count > 1 {
                     self.runFirstOK(urls: Array(urls.dropFirst()), build: build, decode: decode, completion: completion)
                     return
                 }
@@ -78,14 +66,11 @@ class ApiClient {
             }
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                self?.log("\(method) \(path) -> err invalid response")
                 completion(.failure(ApiError.invalidResponse))
                 return
             }
 
-            // If this path/method isn't supported here (404 or 405), try the next base.
             if (httpResponse.statusCode == 404 || httpResponse.statusCode == 405), let self = self, urls.count > 1 {
-                self.log("\(method) \(path) -> \(httpResponse.statusCode), try next base")
                 self.runFirstOK(urls: Array(urls.dropFirst()), build: build, decode: decode, completion: completion)
                 return
             }
@@ -98,27 +83,19 @@ class ApiClient {
                     bodySnippet = "(no body)"
                 }
                 let code = httpResponse.statusCode
-                if code == 403 {
-                    self?.log("\(method) \(path) -> 403 Forbidden (check API key and permissions)")
-                } else {
-                    self?.log("\(method) \(path) -> \(code) \(bodySnippet)")
-                }
                 completion(.failure(ApiError.httpStatus(code, bodySnippet)))
                 return
             }
 
             guard let data = data else {
-                self?.log("\(method) \(path) -> err no data")
                 completion(.failure(ApiError.noData))
                 return
             }
 
             do {
                 let decoded = try decode(data)
-                self?.log("\(method) \(path) -> \(httpResponse.statusCode)")
                 completion(.success(decoded))
             } catch {
-                self?.log("\(method) \(path) -> decode err \(error.localizedDescription)")
                 completion(.failure(error))
             }
         }.resume()

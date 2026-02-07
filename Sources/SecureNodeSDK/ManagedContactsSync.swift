@@ -3,7 +3,7 @@ import Contacts
 import UIKit
 import CryptoKit
 
-final class ManagedContactsSync {
+final class ManagedContactsSync: @unchecked Sendable {
     struct Result {
         let permission: String
         let upserted: Int
@@ -15,6 +15,8 @@ final class ManagedContactsSync {
     private let appGroupId: String
     private let store = CNContactStore()
     private let registry: ManagedContactsRegistry
+    /// ContactStore must not be used on the main thread; run all store operations here.
+    private let contactQueue = DispatchQueue(label: "com.securenode.contacts", qos: .userInitiated)
 
     init(appGroupId: String) {
         self.appGroupId = appGroupId
@@ -55,10 +57,7 @@ final class ManagedContactsSync {
             return Result(permission: perm, upserted: 0, deleted: 0, photosApplied: 0, photoFailures: 0)
         }
 
-        // Only build managed contacts for entries that have an image (photo is non-negotiable attempt).
-        // If logo is missing, rely on Call Directory label only.
         let candidates = branding.filter { ($0.logoUrl ?? "").isEmpty == false && ($0.brandName ?? "").isEmpty == false }
-
         let groups = Self.buildGroups(
             branding: candidates,
             maxProfiles: maxProfiles,
@@ -74,13 +73,12 @@ final class ManagedContactsSync {
 
         for g in groups {
             desiredGroupIds.insert(g.groupId)
-
             let existing = reg.entries[g.groupId]
-            let contactId = existing?.contactId
-            let contactIdentifier = contactId ?? ""
+            let contactId = existing?.contactId ?? ""
+            let contactIdentifier = contactId.isEmpty ? nil : contactId
 
             let (updatedId, photoApplied, photoFailed, registryRemove) = try await upsertManagedContact(
-                existingContactIdentifier: contactIdentifier.isEmpty ? nil : contactIdentifier,
+                existingContactIdentifier: contactIdentifier,
                 group: g
             )
 
@@ -97,16 +95,13 @@ final class ManagedContactsSync {
             }
         }
 
-        // Cleanup registry entries that are no longer desired.
         var deleted = 0
         let toDelete = reg.entries.keys.filter { !desiredGroupIds.contains($0) }
-        if !toDelete.isEmpty {
-            for gid in toDelete {
-                if let entry = reg.entries[gid] {
-                    try deleteContactIfExists(identifier: entry.contactId)
-                    reg.entries.removeValue(forKey: gid)
-                    deleted += 1
-                }
+        for gid in toDelete {
+            if let entry = reg.entries[gid] {
+                try await deleteContactIfExists(identifier: entry.contactId)
+                reg.entries.removeValue(forKey: gid)
+                deleted += 1
             }
         }
 
@@ -210,11 +205,9 @@ final class ManagedContactsSync {
         else if !photoFailed { photoFailed = true }
 
         if let id = existingContactIdentifier, !id.isEmpty {
-            try? deleteContactIfExists(identifier: id)
+            try? await deleteContactIfExists(identifier: id)
         }
 
-        // Add contact without image first; then update with image in a second save.
-        // Two-step save is more reliable for photos in the Contacts app.
         let mutable = CNMutableContact()
         mutable.givenName = group.brandName
         mutable.familyName = ""
@@ -229,24 +222,48 @@ final class ManagedContactsSync {
         let addRequest = CNSaveRequest()
         addRequest.add(mutable, toContainerWithIdentifier: nil)
 
-        do {
-            try store.execute(addRequest)
-        } catch {
-            let ns = error as NSError
-            if ns.domain == "CNErrorDomain", ns.code == 200 {
-                return (nil, photoApplied, photoFailed, true)
+        let imageDataForQueue = imageData
+        let urlValueForQueue = urlValue
+
+        struct AddAndMaybeUpdateResult {
+            let effectiveId: String?
+            let recordGone: Bool
+            let imageApplied: Bool
+        }
+
+        let result: AddAndMaybeUpdateResult = try await runOnContactQueue {
+            do {
+                try self.store.execute(addRequest)
+            } catch {
+                let ns = error as NSError
+                if ns.domain == "CNErrorDomain", ns.code == 200 {
+                    return AddAndMaybeUpdateResult(effectiveId: nil, recordGone: true, imageApplied: false)
+                }
+                throw error
             }
-            throw error
-        }
 
-        guard let effectiveId = await findContactIdentifier(byURL: urlValue) else {
-            return (nil, photoApplied, photoFailed, false)
-        }
+            var foundId: String?
+            let keysForFind: [CNKeyDescriptor] = [
+                CNContactIdentifierKey as CNKeyDescriptor,
+                CNContactUrlAddressesKey as CNKeyDescriptor
+            ]
+            let request = CNContactFetchRequest(keysToFetch: keysForFind)
+            try? self.store.enumerateContacts(with: request) { contact, _ in
+                if foundId != nil { return }
+                for labeled in contact.urlAddresses {
+                    if labeled.value as String == urlValueForQueue {
+                        foundId = contact.identifier
+                        return
+                    }
+                }
+            }
+            guard let effectiveId = foundId else {
+                return AddAndMaybeUpdateResult(effectiveId: nil, recordGone: false, imageApplied: false)
+            }
 
-        // Update contact with image in a separate save so Contacts persists the photo.
-        if let data = imageData {
-            let applied: Bool = {
-                let keys: [CNKeyDescriptor] = [
+            var imageApplied = false
+            if let data = imageDataForQueue {
+                let updateKeys: [CNKeyDescriptor] = [
                     CNContactGivenNameKey as CNKeyDescriptor,
                     CNContactFamilyNameKey as CNKeyDescriptor,
                     CNContactOrganizationNameKey as CNKeyDescriptor,
@@ -255,50 +272,83 @@ final class ManagedContactsSync {
                     CNContactImageDataKey as CNKeyDescriptor,
                     CNContactIdentifierKey as CNKeyDescriptor
                 ]
-                guard let contact = try? store.unifiedContact(withIdentifier: effectiveId, keysToFetch: keys) else { return false }
+                guard let contact = try? self.store.unifiedContact(withIdentifier: effectiveId, keysToFetch: updateKeys) else {
+                    return AddAndMaybeUpdateResult(effectiveId: nil, recordGone: true, imageApplied: false)
+                }
                 let toUpdate = contact.mutableCopy() as! CNMutableContact
                 toUpdate.imageData = data
                 let updateRequest = CNSaveRequest()
                 updateRequest.update(toUpdate)
                 do {
-                    try store.execute(updateRequest)
-                    return true
-                } catch { return false }
-            }()
-            if !applied { photoFailed = true }
+                    try self.store.execute(updateRequest)
+                    imageApplied = true
+                } catch {
+                    let ns = error as NSError
+                    if ns.domain == "CNErrorDomain", ns.code == 200 {
+                        return AddAndMaybeUpdateResult(effectiveId: nil, recordGone: true, imageApplied: false)
+                    }
+                }
+            }
+            return AddAndMaybeUpdateResult(effectiveId: effectiveId, recordGone: false, imageApplied: imageApplied)
         }
 
-        return (effectiveId, photoApplied, photoFailed, false)
+        if result.recordGone {
+            return (nil, photoApplied, photoFailed, true)
+        }
+        if !result.imageApplied && imageData != nil {
+            photoFailed = true
+        }
+        return (result.effectiveId, photoApplied, photoFailed, false)
     }
 
-    /// Find a contact's identifier by our SecureNode URL (for newly added contacts).
-    private func findContactIdentifier(byURL urlValue: String) async -> String? {
-        let keys: [CNKeyDescriptor] = [
-            CNContactIdentifierKey as CNKeyDescriptor,
-            CNContactUrlAddressesKey as CNKeyDescriptor
-        ]
-        let request = CNContactFetchRequest(keysToFetch: keys)
-        var found: String?
-        try? store.enumerateContacts(with: request) { contact, _ in
-            if found != nil { return }
-            for labeled in contact.urlAddresses {
-                if labeled.value as String == urlValue {
-                    found = contact.identifier
+    private func runOnContactQueue<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { cont in
+            contactQueue.async { [weak self] in
+                guard self != nil else {
+                    cont.resume(throwing: NSError(domain: "ManagedContactsSync", code: -1, userInfo: [NSLocalizedDescriptionKey: "unavailable"]))
                     return
+                }
+                do {
+                    let result = try work()
+                    cont.resume(returning: result)
+                } catch {
+                    cont.resume(throwing: error)
                 }
             }
         }
-        return found
     }
 
-    private func deleteContactIfExists(identifier: String) throws {
+    private func findContactIdentifier(byURL urlValue: String) async -> String? {
+        try? await runOnContactQueue { () -> String? in
+            let keys: [CNKeyDescriptor] = [
+                CNContactIdentifierKey as CNKeyDescriptor,
+                CNContactUrlAddressesKey as CNKeyDescriptor
+            ]
+            let request = CNContactFetchRequest(keysToFetch: keys)
+            var found: String?
+            try? self.store.enumerateContacts(with: request) { contact, _ in
+                if found != nil { return }
+                for labeled in contact.urlAddresses {
+                    if labeled.value as String == urlValue {
+                        found = contact.identifier
+                        return
+                    }
+                }
+            }
+            return found
+        }
+    }
+
+    private func deleteContactIfExists(identifier: String) async throws {
         guard !identifier.isEmpty else { return }
-        let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
-        guard let contact = try? store.unifiedContact(withIdentifier: identifier, keysToFetch: keys) else { return }
-        let mutable = contact.mutableCopy() as! CNMutableContact
-        let req = CNSaveRequest()
-        req.delete(mutable)
-        try store.execute(req)
+        try await runOnContactQueue {
+            let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
+            guard let contact = try? self.store.unifiedContact(withIdentifier: identifier, keysToFetch: keys) else { return }
+            let mutable = contact.mutableCopy() as! CNMutableContact
+            let req = CNSaveRequest()
+            req.delete(mutable)
+            try self.store.execute(req)
+        }
     }
 
     private func downloadAndProcessImage(urlString: String) async throws -> Data? {

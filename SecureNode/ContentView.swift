@@ -46,7 +46,10 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("SecureNode")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { triggerInitialSync() }
+        .onAppear {
+            triggerInitialSync()
+            demo.refreshCallDirectoryStatus()
+        }
         .alert("Notice", isPresented: Binding(get: { demo.alertMessage != nil }, set: { newValue in if !newValue { demo.alertMessage = nil } })) {
             Button("OK", role: .cancel) { demo.alertMessage = nil }
         } message: {
@@ -213,15 +216,28 @@ struct ContentView: View {
             .listRowBackground(Color.black.opacity(0.25))
 
             Section {
-                Button("Open Call Blocking & Identification") {
+                Button("Enable Verified Caller Names") {
                     CXCallDirectoryManager.sharedInstance.openSettings { _ in }
                 }
                 .buttonStyle(.plain)
-                Text("Turn on \"SecureNode Call Directory\" so incoming calls show branding.")
+                HStack {
+                    Text("Extension:")
+                        .font(.caption)
+                    Text(demo.callDirectoryExtensionOn ? "On" : "Off")
+                        .font(.caption)
+                        .foregroundStyle(demo.callDirectoryExtensionOn ? .green : .secondary)
+                    Spacer()
+                    if let n = demo.callDirectoryEntryCount {
+                        Text("\(n) entries in dialer")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Turn on Verified Caller Names in Phone settings to display trusted business identities on incoming calls. Names can also come from Contacts; to see if a name is from Call Directory, turn the extension off and call again—if the name disappears, it was from Call Directory.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Call Identification")
+                Text("Verified Caller Names")
             }
             .listRowBackground(Color.black.opacity(0.25))
 
@@ -274,7 +290,7 @@ struct ContentView: View {
     }
 
     private func triggerInitialSync() {
-        demo.addApiDebug("app appeared")
+        demo.addApiDebug("(app:appeared)")
         demo.loadSyncedBranding()
     }
 
@@ -289,7 +305,6 @@ struct ContentView: View {
         let normalized = number.hasPrefix("+") ? number : "+" + number
         isLookingUp = true
         lookupResult = "…"
-        demo.addApiDebug("lookup: \(normalized)")
         demo.sdk.getBranding(for: normalized) { result in
             Task { @MainActor in
                 isLookingUp = false
@@ -298,14 +313,14 @@ struct ContentView: View {
                     let name = branding.brandName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !name.isEmpty {
                         lookupResult = "Brand: \(name)"
-                        demo.addApiDebug("lookup: ok \"\(name)\"")
+                        demo.addApiDebug("(lookup:ok)")
                     } else {
                         lookupResult = "No brand for this number"
-                        demo.addApiDebug("lookup: ok (no brand)")
+                        demo.addApiDebug("(lookup:ok)")
                     }
                 case .failure(let error):
                     lookupResult = "Error: \(error.localizedDescription)"
-                    demo.addApiDebug("lookup: err \(error.localizedDescription)")
+                    demo.addApiDebug("(lookup:err) \(error.localizedDescription)")
                 }
             }
         }

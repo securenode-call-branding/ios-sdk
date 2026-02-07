@@ -5,15 +5,15 @@
 	<key>CFBundleIdentifier</key>
 	<string>SecureNodeKit.SecureNode.CallDirectory</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.0.2</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>CFBundleExecutable</key>
 	<string>SecureNodeCallDirectoryExtension</string>
 	<key>CFBundleName</key>
-	<string>SecureNode Call Directory</string>
+	<string>Verified Caller Names</string>
 	<key>CFBundleDisplayName</key>
-	<string>SecureNode Call Directory</string>
+	<string>Verified Caller Names</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

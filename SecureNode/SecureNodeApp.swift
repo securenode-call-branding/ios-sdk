@@ -65,14 +65,14 @@ private struct SecureNodeRootView: View {
                 ContentView()
             }
         }
-        .alert("Permissions needed", isPresented: Binding(
+        .alert("Verified Caller Names", isPresented: Binding(
             get: { demo.showPermissionFailSafeAlert },
             set: { if !$0 { demo.dismissPermissionFailSafeAlert() } }
         )) {
             Button("Open Settings") { demo.openPermissionSettings() }
             Button("Not now", role: .cancel) { demo.dismissPermissionFailSafeAlert() }
         } message: {
-            Text("SecureNode needs these permissions to verify caller identity and ensure incoming calls are verified.")
+            Text("Enable Verified Caller Names to display trusted business identities on incoming calls. Calls are never blocked, intercepted, or recorded.")
         }
     }
 }
@@ -94,7 +94,7 @@ final class DemoSdkHolder: ObservableObject {
             self?.addApiDebug(line)
         })
         let instance = SecureNodeSDK(config: config, options: options)
-        self.addApiDebug("SDK ready \(DemoConfig.apiURLString)")
+        self.addApiDebug("(sdk:ready)")
         return instance
     }()
 
@@ -112,6 +112,8 @@ final class DemoSdkHolder: ObservableObject {
     @Published var apiDebugLines: [String] = []
     @Published var apiReachability: ApiReachability = .unknown
     @Published var showPermissionFailSafeAlert = false
+    @Published var callDirectoryExtensionOn: Bool = false
+    @Published var callDirectoryEntryCount: Int? = nil
     private var permissionFailSafeContactsNeeded = false
     private var permissionFailSafeCallDirectoryNeeded = false
     private var permissionFailSafeWorkItem: DispatchWorkItem?
@@ -205,12 +207,22 @@ final class DemoSdkHolder: ObservableObject {
         reProbeTimer = nil
     }
 
+    /// Refresh Call Directory extension status and snapshot entry count (e.g. when returning from Settings).
+    func refreshCallDirectoryStatus() {
+        let count = sdk.getCallDirectorySnapshotEntryCount()
+        DispatchQueue.main.async { [weak self] in
+            self?.callDirectoryEntryCount = count
+        }
+        sdk.getCallDirectoryExtensionEnabled { [weak self] enabled in
+            self?.callDirectoryExtensionOn = enabled
+        }
+    }
+
     /// Trigger branding sync (automatic on app active; no button required).
     func triggerSync(completion: (() -> Void)? = nil) {
         // Set initial UI state on main
         DispatchQueue.main.async { [weak self] in
             self?.lastSyncMessage = "Syncing…"
-            self?.addApiDebug("sync: start")
         }
 
         sdk.syncBranding(since: nil) { [weak self] result in
@@ -227,8 +239,8 @@ final class DemoSdkHolder: ObservableObject {
                     case .success(let response):
                         self.lastSyncCount = response.branding.count
                         self.lastSyncMessage = "Synced \(response.branding.count) items"
-                        self.addApiDebug("sync: ok \(response.branding.count) items")
                         self.loadSyncedBranding()
+                        self.refreshCallDirectoryStatus()
                         if !UserDefaults.standard.bool(forKey: hasExitedAfterFirstSyncKey) {
                             UserDefaults.standard.set(true, forKey: hasExitedAfterFirstSyncKey)
                             self.lastSyncMessage = "First sync complete. Closing so you can reopen and verify."
@@ -238,7 +250,7 @@ final class DemoSdkHolder: ObservableObject {
                         }
                     case .failure(let error):
                         self.lastSyncMessage = "Error: \(error.localizedDescription)"
-                        self.addApiDebug("sync: err \(error.localizedDescription)")
+                        self.addApiDebug("(sync:err) \(error.localizedDescription)")
                     }
                     completion?()
                 }
@@ -291,9 +303,9 @@ final class DemoSdkHolder: ObservableObject {
                 let manager = CXCallDirectoryManager.sharedInstance
                 manager.reloadExtension(withIdentifier: bundleId) { error in
                     if let error = error {
-                        self.addApiDebug("call directory reload error: \(error.localizedDescription)")
+                        self.addApiDebug("(cd_reload:err) \(error.localizedDescription)")
                     } else {
-                        self.addApiDebug("call directory reload: requested")
+                        self.addApiDebug("(cd_reload:ok)")
                     }
                 }
             }

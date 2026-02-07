@@ -31,7 +31,7 @@ struct TrustEngineNoticeView: View {
                     Text("• Go to Phone → Call Blocking & Identification")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.9))
-                    Text("• Enable SecureNode")
+                    Text("• Enable Verified Caller Names")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.9))
                 }
